@@ -108,12 +108,6 @@ override_doctype_class = {"Web Form": "payments.overrides.payment_webform.Paymen
 # 	}
 # }
 
-# doc_events = {
-#     "Easebuzz Settings": {
-#         "validate": "payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.validate"
-#     }
-# }
-
 fixtures = [
     {"dt": "DocType", "filters": [["name", "in", ["Easebuzz Settings"]]]}
 ]
