@@ -11,14 +11,14 @@ class EasebuzzSettings(Document):
         print("validate")
         """Validate the settings and create the payment gateway entry."""
         create_payment_gateway("Easebuzz")
-        self.validate_transaction_currency()
+    #     self.validate_transaction_currency()
 
-    def validate_transaction_currency(self):
-        """Ensure the selected currency is supported by Easebuzz."""
-        if self.currency not in self.supported_currencies:
-            frappe.throw(
-                _("Easebuzz does not support transactions in currency '{0}'").format(self.currency)
-            )
+    # def validate_transaction_currency(self):
+    #     """Ensure the selected currency is supported by Easebuzz."""
+    #     if self.currency not in self.supported_currencies:
+    #         frappe.throw(
+    #             _("Easebuzz does not support transactions in currency '{0}'").format(self.currency)
+    #         )
 
     def get_payment_url(self, **kwargs):
         """Generate the payment URL for Easebuzz."""
