@@ -1,0 +1,15 @@
+{% extends "templates/web.html" %}
+
+{% block title %} Easebuzz Payment {% endblock %}
+
+{% block page_content %}
+<h1>Easebuzz Payment</h1>
+<form id="easebuzz-payment-form" method="POST" action="/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_payment.make_payment">
+    <input type="hidden" name="amount" value="{{ amount }}">
+    <input type="hidden" name="currency" value="INR">
+    <input type="hidden" name="order_id" value="{{ order_id }}">
+    <input type="hidden" name="customer_email" value="{{ customer_email }}">
+    <input type="hidden" name="customer_phone" value="{{ customer_phone }}">
+    <button type="submit">Pay Now</button>
+</form>
+{% endblock %}
