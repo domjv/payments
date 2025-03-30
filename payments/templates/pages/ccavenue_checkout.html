@@ -1,0 +1,48 @@
+{% extends "templates/web.html" %}
+
+{% block title %} Payment {% endblock %}
+
+{%- block header -%}
+<head>
+    <title>CCAvenue Checkout</title>
+</head>
+{% endblock %}
+
+{% block script %}
+<script defer type="text/javascript">
+    document.ccavenue_form.submit();
+</script>
+{% endblock %}
+
+{%- block page_content -%}
+<body>
+    <div class="centered">
+        <h2>Please do not refresh this page...</h2>
+        {% if header_img %}
+        <div class="text-center">
+            <img src="{{ header_img }}" alt="Payment Gateway Logo" style="max-height: 100px;">
+        </div>
+        {% endif %}
+
+        <form method="post" action="{{ api_url }}" name="ccavenue_form">
+            <input type="hidden" name="encRequest" value="{{ payment_data.encRequest }}">
+            <input type="hidden" name="access_code" value="{{ payment_data.access_code }}">
+        </form>
+    </div>
+</body>
+{% endblock %}
+
+{% block style %}
+<style>
+    .centered {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        text-align: center;
+    }
+    .web-footer {
+        display: none;
+    }
+</style>
+{% endblock %}
