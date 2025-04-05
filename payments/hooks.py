@@ -115,6 +115,9 @@ scheduler_events = {
 	"all": [
 		"payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.capture_payment",
 	],
+    "daily": [
+        "payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.reconcile_pending_transactions"
+    ],
 }
 
 # Testing
@@ -179,3 +182,13 @@ override_whitelisted_methods = {
 # Recommended only for DocTypes which have limited documents with untranslated names
 # For example: Role, Gender, etc.
 # translated_search_doctypes = []
+
+# Webhooks
+# --------------------------------
+
+webhooks = {
+    "CCAvenue": {
+        "secret_key_field": "ccavenue_settings.webhook_secret",
+        "endpoint": "payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.process_webhook"
+    }
+}

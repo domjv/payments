@@ -1,9 +1,9 @@
 # Copyright (c) 2024, Frappe Technologies and contributors
 # License: MIT. See LICENSE
 
-import base64
 import hashlib
 import json
+import urllib.parse
 from urllib.parse import urlencode
 
 import frappe
@@ -14,9 +14,6 @@ from frappe.utils import call_hook_method, get_url
 
 from payments.utils import create_payment_gateway
 
-# Import necessary libraries for CCAvenue encryption/decryption
-from Crypto.Cipher import AES
-import binascii
 
 class CCAvenueSettings(Document):
     supported_currencies = ("INR", "USD", "SGD", "GBP", "EUR")
@@ -29,7 +26,7 @@ class CCAvenueSettings(Document):
 
     def validate_ccavenue_credentials(self):
         if self.merchant_id and self.access_code and self.encryption_key:
-            # We can't validate CCAvenue credentials without making an actual API call
+            # CCAvenue credentials validation
             pass
 
     def validate_transaction_currency(self, currency):
@@ -45,10 +42,11 @@ class CCAvenueSettings(Document):
         # Create unique order id by making it equal to the integration request
         integration_request = create_request_log(kwargs, service_name="CCAvenue")
         kwargs.update(dict(order_id=integration_request.name))
-
+        
         return get_url(f"./ccavenue_checkout?token={integration_request.name}")
 
     def create_request(self, data):
+        """Create CCAvenue request"""
         self.data = frappe._dict(data)
 
         try:
@@ -61,9 +59,7 @@ class CCAvenueSettings(Document):
             return {
                 "redirect_to": frappe.redirect_to_message(
                     _("Server Error"),
-                    _(
-                        "Seems issue with server's CCAvenue configuration. Don't worry, in case of failure amount will get refunded to your account."
-                    ),
+                    _("Seems issue with server's CCAvenue configuration. Don't worry, in case of failure amount will get refunded to your account."),
                 ),
                 "status": 401,
             }
@@ -72,21 +68,23 @@ class CCAvenueSettings(Document):
         """
         Authorize payment when user submits the form on CCAvenue page
         """
+        # Process data returned by CCAvenue
         data = self.data
         
-        # Get payment status from data
+        # Identify the status from CCAvenue's response
         if data.get("order_status") == "Success":
-            status = "Completed"
+            status_changed_to = "Completed"
             self.integration_request.update_status(data, "Completed")
-            self.flags.status_changed_to = "Completed"
         else:
-            status = "Failed"
+            status_changed_to = "Failed"
             self.integration_request.update_status(data, "Failed")
-            
+        
+        self.flags.status_changed_to = status_changed_to
+        
         redirect_to = data.get("redirect_to") or None
         redirect_message = data.get("redirect_message") or None
 
-        if self.flags.status_changed_to == "Completed":
+        if self.flags.status_changed_to in ("Authorized", "Verified", "Completed"):
             if self.data.reference_doctype and self.data.reference_docname:
                 custom_redirect_to = None
                 try:
@@ -99,9 +97,7 @@ class CCAvenueSettings(Document):
                 if custom_redirect_to:
                     redirect_to = custom_redirect_to
 
-            redirect_url = (
-                f"payment-success?doctype={self.data.reference_doctype}&docname={self.data.reference_docname}"
-            )
+            redirect_url = f"payment-success?doctype={self.data.reference_doctype}&docname={self.data.reference_docname}"
         else:
             redirect_url = "payment-failed"
 
@@ -110,7 +106,7 @@ class CCAvenueSettings(Document):
         if redirect_message:
             redirect_url += "&" + urlencode({"redirect_message": redirect_message})
 
-        return {"redirect_to": redirect_url, "status": status}
+        return {"redirect_to": redirect_url, "status": status_changed_to}
 
     def create_encrypted_request_data(self, **kwargs):
         """Create encrypted data for CCAvenue request"""
@@ -132,126 +128,103 @@ class CCAvenueSettings(Document):
             })
         }
         
-        # Convert dictionary to query string
-        merchant_data = urlencode(request_data)
+        # CCAvenue requires the request data to be a query string
+        query_string = urllib.parse.urlencode(request_data)
         
-        # Encrypt the data using CCAvenue's encryption method
-        encrypted_data = self.encrypt_data(merchant_data)
+        # Encrypt the query string using CCAvenue's encryption method
+        encrypted_data = self.encrypt_request_data(query_string)
         
         return {
             "encRequest": encrypted_data,
             "access_code": self.access_code
         }
     
-    def encrypt_data(self, merchant_data):
-        """Encrypt data using CCAvenue's AES encryption"""
-        working_key = self.encryption_key
+    def encrypt_request_data(self, data):
+        """
+        Encrypt request data using AES encryption
         
-        # AES requires data length to be multiple of 16, pad if needed
-        iv = '\x00' * 16
-        padded_data = self._pad(merchant_data)
+        Note: This is a placeholder. You'll need to implement the actual
+        encryption logic according to CCAvenue's documentation.
+        """
+        # You need to implement AES encryption here according to CCAvenue's documentation
+        # Most likely will need to use the Crypto.Cipher.AES module
         
-        # Create cipher object and encrypt data
-        cipher = AES.new(working_key.encode('utf-8'), AES.MODE_CBC, iv.encode('utf-8'))
-        encrypted_data = cipher.encrypt(padded_data.encode('utf-8'))
+        # For example:
+        # from Crypto.Cipher import AES
+        # import base64
+        # iv = '\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f'
+        # aes = AES.new(self.encryption_key.encode(), AES.MODE_CBC, iv.encode())
+        # encrypted_data = base64.b64encode(aes.encrypt(self._pad(data).encode())).decode()
+        # return encrypted_data
         
-        # Encode the encrypted binary data to hexadecimal string
-        encrypted_hex = binascii.hexlify(encrypted_data).decode('utf-8')
-        return encrypted_hex
-    
-    def decrypt_data(self, encrypted_data):
-        """Decrypt data received from CCAvenue"""
-        working_key = self.encryption_key
-        
-        # Convert the hexadecimal string to binary
-        encrypted_binary = binascii.unhexlify(encrypted_data)
-        
-        # Create cipher object and decrypt data
-        iv = '\x00' * 16
-        cipher = AES.new(working_key.encode('utf-8'), AES.MODE_CBC, iv.encode('utf-8'))
-        decrypted_data = cipher.decrypt(encrypted_binary)
-        
-        # Remove padding
-        return self._unpad(decrypted_data.decode('utf-8'))
-    
-    def _pad(self, data):
-        """Pad data to multiple of 16 bytes (128 bits)"""
-        padding_size = 16 - (len(data) % 16)
-        padding = chr(padding_size) * padding_size
-        return data + padding
-    
-    def _unpad(self, data):
-        """Remove padding from decrypted data"""
-        padding_size = ord(data[-1])
-        return data[:-padding_size]
+        return data  # Replace this with actual encryption logic
 
-    @frappe.whitelist()
-    def clear(self):
-        self.merchant_id = self.access_code = None
-        self.encryption_key = None
-        self.redirect_url = None
-        self.flags.ignore_mandatory = True
-        self.save()
+    def _pad(self, data):
+        """Pad the data to be a multiple of 16"""
+        length = 16 - (len(data) % 16)
+        return data + chr(length) * length
+    
+    def decrypt_request_data(self, encrypted_data):
+        """
+        Decrypt data received from CCAvenue
+        
+        Note: This is a placeholder. You'll need to implement the actual
+        decryption logic according to CCAvenue's documentation.
+        """
+        # You need to implement AES decryption here according to CCAvenue's documentation
+        # Similar to the encryption logic
+        
+        return encrypted_data  # Replace this with actual decryption logic
+
 
 @frappe.whitelist(allow_guest=True)
 def verify_transaction():
     """Handle CCAvenue's return request after payment"""
     try:
-        # Get the encrypted response from CCAvenue
-        encResp = frappe.request.form.get("encResp")
-        
-        if not encResp:
-            frappe.local.response["type"] = "redirect"
-            frappe.local.response["location"] = get_url("payment-failed")
-            return
-            
-        # Get merchant param1 which contains reference doctype, docname and token
         settings = frappe.get_doc("CCAvenue Settings")
+        data = frappe.request.form
         
-        # Decrypt the response
-        decrypted_data = settings.decrypt_data(encResp)
+        # Decrypt the response from CCAvenue
+        encrypted_response = data.get("encResp")
+        decrypted_data = settings.decrypt_request_data(encrypted_response)
         
-        # Parse the decrypted data (URL encoded key-value pairs)
-        response_data = {}
-        for param in decrypted_data.split('&'):
-            key, value = param.split('=')
-            response_data[key] = value
+        # Parse the decrypted response
+        parsed_data = urllib.parse.parse_qs(decrypted_data)
         
-        # Extract merchant_param1 and parse the JSON
-        merchant_data = json.loads(response_data.get("merchant_param1", "{}"))
+        # Get merchant_param1 which contains our reference information
+        merchant_param1 = parsed_data.get("merchant_param1", ["{}"])[0]
+        reference_info = json.loads(merchant_param1)
+        
+        token = reference_info.get("token")
         
         # Get the integration request
-        token = merchant_data.get("token")
         integration_request = frappe.get_doc("Integration Request", token)
         
-        # Update the data with the response from CCAvenue
-        data = json.loads(integration_request.data)
-        data.update({
-            "order_status": response_data.get("order_status"),
-            "tracking_id": response_data.get("tracking_id"),
-            "bank_ref_no": response_data.get("bank_ref_no"),
-            "payment_mode": response_data.get("payment_mode"),
-            "failure_message": response_data.get("failure_message"),
-            "ccavenue_response": response_data
-        })
+        # Create a response to be processed by the authorize_payment method
+        response = {
+            "order_status": parsed_data.get("order_status", ["Failure"])[0],
+            "tracking_id": parsed_data.get("tracking_id", [""])[0],
+            "reference_doctype": reference_info.get("reference_doctype"),
+            "reference_docname": reference_info.get("reference_docname"),
+            "token": token
+        }
         
-        # Create a new controller instance
-        controller = frappe.get_doc("CCAvenue Settings")
-        controller.data = frappe._dict(data)
-        controller.integration_request = integration_request
+        # Process the response
+        settings.data = frappe._dict(response)
+        result = settings.authorize_payment()
         
-        # Set status based on order_status
-        if response_data.get("order_status") == "Success":
-            controller.flags.status_changed_to = "Completed"
-        
-        # Call authorize_payment to complete the flow
-        result = controller.authorize_payment()
-        
-        # Redirect to success/failure page
+        # Redirect to appropriate URL
         frappe.local.response["type"] = "redirect"
-        frappe.local.response["location"] = get_url(result["redirect_to"])
+        frappe.local.response["location"] = get_url(result.get("redirect_to"))
         
     except Exception:
         frappe.log_error(frappe.get_traceback(), "CCAvenue Payment Verification Error")
         frappe.local.response["type"] = "redirect"
         frappe.local.response["location"] = get_url("payment-failed")
+
+
+@frappe.whitelist()
+def get_api_key():
+    """Get CCAvenue API key"""
+    settings = frappe.get_doc("CCAvenue Settings")
+    return settings.access_code
