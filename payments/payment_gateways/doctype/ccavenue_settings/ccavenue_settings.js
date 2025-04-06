@@ -26,7 +26,7 @@ frappe.ui.form.on("CCAvenue Settings", {
             if (r.message && r.message.success) {
               frappe.msgprint(__('Connection Successful'));
             } else {
-              frappe.msgprint(__('Connection Failed: ') + r.message.error);
+              frappe.msgprint(__('Connection Failed: ') + (r.message ? r.message.error : "Unknown error"));
             }
           }
         });

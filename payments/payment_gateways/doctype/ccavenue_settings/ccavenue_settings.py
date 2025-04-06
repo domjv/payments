@@ -161,16 +161,22 @@ class CCAvenueSettings(Document):
     def create_encrypted_request_data(self, **kwargs):
         """Create encrypted data for CCAvenue request"""
         # Format the data as required by CCAvenue
-        request_data = {
+        merchant_data = {
             "merchant_id": self.merchant_id,
             "order_id": kwargs.get("order_id"),
-            "amount": kwargs.get("amount"),
             "currency": kwargs.get("currency", "INR"),
+            "amount": str(kwargs.get("amount")),
             "redirect_url": get_url(f"/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.verify_transaction"),
             "cancel_url": get_url(f"/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.verify_transaction"),
             "language": "EN",
-            "billing_name": kwargs.get("payer_name"),
-            "billing_email": kwargs.get("payer_email"),
+            "billing_name": kwargs.get("payer_name", ""),
+            "billing_address": kwargs.get("billing_address", ""),
+            "billing_city": kwargs.get("billing_city", ""),
+            "billing_state": kwargs.get("billing_state", ""),
+            "billing_zip": kwargs.get("billing_zip", ""),
+            "billing_country": kwargs.get("billing_country", "India"),
+            "billing_tel": kwargs.get("billing_tel", ""),
+            "billing_email": kwargs.get("payer_email", ""),
             "merchant_param1": json.dumps({
                 "reference_doctype": kwargs.get("reference_doctype"),
                 "reference_docname": kwargs.get("reference_docname"),
@@ -179,10 +185,10 @@ class CCAvenueSettings(Document):
         }
         
         # Convert dictionary to query string
-        merchant_data = urlencode(request_data)
+        merchant_data_string = "&".join([f"{key}={value}" for key, value in merchant_data.items()])
         
         # Encrypt the data using CCAvenue's encryption method
-        encrypted_data = encrypt_ccavenue_data(merchant_data, self.encryption_key)
+        encrypted_data = encrypt_ccavenue_data(merchant_data_string, self.encryption_key)
         
         return {
             "encRequest": encrypted_data,
@@ -192,9 +198,9 @@ class CCAvenueSettings(Document):
     def get_api_url(self):
         """Get the CCAvenue API URL based on environment"""
         if self.environment == "Production":
-            return "https://secure.ccavenue.com/transaction/transaction.do"
+            return "https://secure.ccavenue.com/transaction/transaction.do?command=initiateTransaction"
         else:
-            return "https://test.ccavenue.com/transaction/transaction.do"
+            return "https://test.ccavenue.com/transaction/transaction.do?command=initiateTransaction"
     
     @frappe.whitelist()
     def clear(self):
