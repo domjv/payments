@@ -1,58 +1,70 @@
-{% extends "templates/web.html" %}
-
-{% block title %} Payment {% endblock %}
-
-{%- block header -%}{% endblock %}
-
-{% block script %}
+{% extends "templates/web.html" %} {% block title %} Payment {% endblock %} {%-
+block header -%}{% endblock %} {% block script %}
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
 <script>
-  document.addEventListener("DOMContentLoaded", function() {
-    document.getElementById("ccavenue_payment_form").submit();
+  $(document).ready(function () {
+    // Auto-adjust iframe height based on content
+    $("iframe#paymentFrame").load(function () {
+      window.addEventListener(
+        "message",
+        function (e) {
+          $("#paymentFrame").css("height", e.data["newHeight"] + "px");
+        },
+        false
+      );
+    });
   });
 </script>
-{% endblock %}
-
-{%- block page_content -%}
+{% endblock %} {%- block page_content -%}
 <div class="container">
   <div class="row">
     <div class="col-md-12 text-center">
       <h3>{{ _("Processing Payment") }}</h3>
       <p>{{ _("Please do not refresh this page...") }}</p>
-      
+
       {% if header_img %}
       <div class="text-center">
-        <img src="{{ header_img }}" alt="CCAvenue" style="max-height: 100px;">
+        <img src="{{ header_img }}" alt="CCAvenue" style="max-height: 100px" />
       </div>
       {% endif %}
-      
+
       <div class="ccavenue-loading">
         <i class="fa fa-spinner fa-spin fa-3x"></i>
       </div>
-      
-      <form id="ccavenue_payment_form" method="post" name="redirect" action="{{ api_url }}">
-        <input type="hidden" name="encRequest" value="{{ payment_data.encRequest }}">
-        <input type="hidden" name="access_code" value="{{ payment_data.access_code }}">
-      </form>
+
+      <iframe
+        width="482"
+        height="500"
+        scrolling="No"
+        frameborder="0"
+        id="paymentFrame"
+        src="{{ api_url }}&merchant_id={{ payment_data.merchant_id }}&encRequest={{ payment_data.encRequest }}&access_code={{ payment_data.access_code }}"
+      >
+      </iframe>
     </div>
   </div>
 </div>
-{% endblock %}
-
-{% block style %}
+{% endblock %} {% block style %}
 <style>
-  header, footer {
+  header,
+  footer {
     display: none;
   }
-  
+
   .ccavenue-loading {
-    margin-top: 30px;
+    display: none; /* Hide the loading spinner since we're using direct iframe */
   }
-  
+
   .container {
     display: flex;
     justify-content: center;
     align-items: center;
     height: 100vh;
+  }
+
+  iframe#paymentFrame {
+    min-height: 500px;
+    transition: height 0.3s ease;
   }
 </style>
 {% endblock %}

@@ -51,7 +51,7 @@ For CCAvenue payment status is Completed
 """
 
 import json
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote_plus
 
 import frappe
 from frappe import _
@@ -59,7 +59,7 @@ from frappe.integrations.utils import create_request_log
 from frappe.model.document import Document
 from frappe.utils import call_hook_method, get_url
 
-from payments.payment_gateways.doctype.ccavenue_settings.ccavenue_utils import decrypt_ccavenue_data, encrypt_ccavenue_data
+from payments.payment_gateways.doctype.ccavenue_settings.ccavenue_utils import decrypt, encrypt
 from payments.utils import create_payment_gateway
 
 
@@ -162,37 +162,37 @@ class CCAvenueSettings(Document):
         """Create encrypted data for CCAvenue request"""
         # Format the data as required by CCAvenue
         merchant_data = {
-            "merchant_id": self.merchant_id,
-            "order_id": kwargs.get("order_id"),
-            "currency": kwargs.get("currency", "INR"),
-            "amount": str(kwargs.get("amount")),
-            "redirect_url": get_url(f"/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.verify_transaction"),
-            "cancel_url": get_url(f"/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.verify_transaction"),
-            "language": "EN",
-            "billing_name": kwargs.get("payer_name", ""),
-            "billing_address": kwargs.get("billing_address", ""),
-            "billing_city": kwargs.get("billing_city", ""),
-            "billing_state": kwargs.get("billing_state", ""),
-            "billing_zip": kwargs.get("billing_zip", ""),
-            "billing_country": kwargs.get("billing_country", "India"),
-            "billing_tel": kwargs.get("billing_tel", ""),
-            "billing_email": kwargs.get("payer_email", ""),
+            'merchant_id': self.merchant_id,
+            'order_id': kwargs.get('order_id'),
+            'currency': kwargs.get('currency', 'INR'),
+            'amount': str(kwargs.get('amount')),
+            'redirect_url': get_url("/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.verify_transaction"),
+            'cancel_url': get_url("/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.verify_transaction"),
+            'language': 'EN',
+            'integration_type': 'iframe_normal',
             "merchant_param1": json.dumps({
                 "reference_doctype": kwargs.get("reference_doctype"),
                 "reference_docname": kwargs.get("reference_docname"),
                 "token": kwargs.get("order_id")
-            })
+            }),
+            'customer_identifier': kwargs.get('payer_email', '')
         }
-        
-        # Convert dictionary to query string
-        merchant_data_string = "&".join([f"{key}={value}" for key, value in merchant_data.items()])
-        
+
+        # Create the merchant data string exactly as CCAvenue expects
+        merchant_data_string = '&'.join([
+            f"{key}={value}" for key, value in merchant_data.items()
+        ])
+        merchant_data_string = merchant_data_string + '&'
+
         # Encrypt the data using CCAvenue's encryption method
-        encrypted_data = encrypt_ccavenue_data(merchant_data_string, self.encryption_key)
+        encrypted_data = encrypt(merchant_data_string, self.get_password(fieldname="encryption_key", raise_exception=False))
         
+
         return {
             "encRequest": encrypted_data,
-            "access_code": self.access_code
+            "access_code": self.access_code,
+            "merchant_id": self.merchant_id,
+            "non_encrypted_data": merchant_data_string
         }
     
     def get_api_url(self):
@@ -218,7 +218,7 @@ def verify_transaction():
     try:
         # Get the encrypted response from CCAvenue
         encResp = frappe.request.form.get("encResp")
-        
+    
         if not encResp:
             frappe.local.response["type"] = "redirect"
             frappe.local.response["location"] = get_url("payment-failed")
@@ -228,8 +228,8 @@ def verify_transaction():
         settings = frappe.get_doc("CCAvenue Settings")
         
         # Decrypt the response
-        decrypted_data = decrypt_ccavenue_data(encResp, settings.encryption_key)
-        
+        decrypted_data = decrypt(encResp, settings.get_password(fieldname="encryption_key", raise_exception=False))
+        print(decrypted_data)
         # Parse the decrypted data (URL encoded key-value pairs)
         response_data = {}
         for param in decrypted_data.split('&'):
@@ -238,12 +238,22 @@ def verify_transaction():
                 response_data[key] = value
         
         # Extract merchant_param1 and parse the JSON
-        merchant_data = json.loads(response_data.get("merchant_param1", "{}"))
-        
+        merchant_param_str = response_data.get("merchant_param1", "")
+        merchant_data = {}
+        if merchant_param_str:
+            parts = merchant_param_str.split(", ")
+            for part in parts:
+                if ":" in part:
+                    k, v = part.split(":", 1)
+                    merchant_data[k.strip()] = v.strip()
+                elif " " in part:
+                    k, v = part.split(" ", 1)
+                    merchant_data[k.strip()] = v.strip()
         # Get the integration request
         token = merchant_data.get("token")
-        integration_request = frappe.get_doc("Integration Request", token)
-        
+        integration_request_name = frappe.get_all("Integration Request", filters=[["reference_docname","=",token]])[0]
+        integration_request = frappe.get_doc("Integration Request",integration_request_name)
+        print(integration_request)
         # Update the data with the response from CCAvenue
         data = json.loads(integration_request.data)
         data.update({
@@ -255,6 +265,7 @@ def verify_transaction():
             "ccavenue_response": response_data
         })
         
+
         # Create a new controller instance
         controller = frappe.get_doc("CCAvenue Settings")
         controller.data = frappe._dict(data)
