@@ -216,6 +216,8 @@ class CCAvenueSettings(Document):
 def verify_transaction():
     """Handle CCAvenue's return request after payment"""
     try:
+        print("Inside verfity transaction starting..")
+        print(frappe.session.user)
         # Get the encrypted response from CCAvenue
         encResp = frappe.request.form.get("encResp")
     

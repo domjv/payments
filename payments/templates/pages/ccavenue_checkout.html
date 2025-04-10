@@ -1,70 +1,30 @@
-{% extends "templates/web.html" %} {% block title %} Payment {% endblock %} {%-
-block header -%}{% endblock %} {% block script %}
-<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
-<script>
-  $(document).ready(function () {
-    // Auto-adjust iframe height based on content
-    $("iframe#paymentFrame").load(function () {
-      window.addEventListener(
-        "message",
-        function (e) {
-          $("#paymentFrame").css("height", e.data["newHeight"] + "px");
-        },
-        false
-      );
-    });
-  });
-</script>
+{% block script %}
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
 {% endblock %} {%- block page_content -%}
-<div class="container">
-  <div class="row">
-    <div class="col-md-12 text-center">
-      <h3>{{ _("Processing Payment") }}</h3>
-      <p>{{ _("Please do not refresh this page...") }}</p>
+    <div style="justify-self: center">
 
-      {% if header_img %}
-      <div class="text-center">
-        <img src="{{ header_img }}" alt="CCAvenue" style="max-height: 100px" />
-      </div>
-      {% endif %}
-
-      <div class="ccavenue-loading">
-        <i class="fa fa-spinner fa-spin fa-3x"></i>
-      </div>
-
-      <iframe
-        width="482"
-        height="500"
-        scrolling="No"
-        frameborder="0"
-        id="paymentFrame"
-        src="{{ api_url }}&merchant_id={{ payment_data.merchant_id }}&encRequest={{ payment_data.encRequest }}&access_code={{ payment_data.access_code }}"
-      >
-      </iframe>
+    <iframe
+            width="482"
+            height="500"
+            scrolling="No"
+            frameborder="0"
+            id="paymentFrame"
+            src="{{ api_url }}&merchant_id={{ payment_data.merchant_id }}&encRequest={{ payment_data.encRequest }}&access_code={{ payment_data.access_code }}"
+    >
     </div>
-  </div>
-</div>
-{% endblock %} {% block style %}
-<style>
-  header,
-  footer {
-    display: none;
-  }
+{% endblock %}
+{% block style %}
+    <style>
 
-  .ccavenue-loading {
-    display: none; /* Hide the loading spinner since we're using direct iframe */
-  }
+        body {
+            justify-self: center;
+        }
 
-  .container {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-  }
-
-  iframe#paymentFrame {
-    min-height: 500px;
-    transition: height 0.3s ease;
-  }
-</style>
+        iframe#paymentFrame {
+            max-width: fit-content;
+            margin-left: auto;
+            margin-right: auto;
+            min-height: 500px;
+        }
+    </style>
 {% endblock %}
