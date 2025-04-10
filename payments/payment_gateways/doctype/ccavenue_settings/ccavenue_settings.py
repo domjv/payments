@@ -173,10 +173,13 @@ class CCAvenueSettings(Document):
             "merchant_param1": json.dumps({
                 "reference_doctype": kwargs.get("reference_doctype"),
                 "reference_docname": kwargs.get("reference_docname"),
-                "token": kwargs.get("order_id")
+                "token": kwargs.get("order_id"),
+                "user": frappe.session.user  # Add the current user
             }),
             'customer_identifier': kwargs.get('payer_email', '')
         }
+        # Important: Set this flag to preserve cookies during redirect
+        frappe.flags.preserve_cookies = True
 
         # Create the merchant data string exactly as CCAvenue expects
         merchant_data_string = '&'.join([
@@ -186,7 +189,7 @@ class CCAvenueSettings(Document):
 
         # Encrypt the data using CCAvenue's encryption method
         encrypted_data = encrypt(merchant_data_string, self.get_password(fieldname="encryption_key", raise_exception=False))
-        
+
 
         return {
             "encRequest": encrypted_data,
@@ -194,7 +197,7 @@ class CCAvenueSettings(Document):
             "merchant_id": self.merchant_id,
             "non_encrypted_data": merchant_data_string
         }
-    
+
     def get_api_url(self):
         """Get the CCAvenue API URL based on environment"""
         if self.environment == "Production":
@@ -242,20 +245,48 @@ def verify_transaction():
         # Extract merchant_param1 and parse the JSON
         merchant_param_str = response_data.get("merchant_param1", "")
         merchant_data = {}
-        if merchant_param_str:
-            parts = merchant_param_str.split(", ")
-            for part in parts:
-                if ":" in part:
-                    k, v = part.split(":", 1)
-                    merchant_data[k.strip()] = v.strip()
-                elif " " in part:
-                    k, v = part.split(" ", 1)
-                    merchant_data[k.strip()] = v.strip()
+        try:
+            # Properly parse the JSON data
+            merchant_data = json.loads(merchant_param_str)
+        except:
+            # Fallback to manual parsing if JSON parse fails
+            if merchant_param_str:
+                parts = merchant_param_str.split(", ")
+                for part in parts:
+                    if ":" in part:
+                        k, v = part.split(":", 1)
+                        merchant_data[k.strip()] = v.strip()
+                    elif " " in part:
+                        k, v = part.split(" ", 1)
+                        merchant_data[k.strip()] = v.strip()
+                        
         # Get the integration request
         token = merchant_data.get("token")
-        integration_request_name = frappe.get_all("Integration Request", filters=[["reference_docname","=",token]])[0]
-        integration_request = frappe.get_doc("Integration Request",integration_request_name)
-        print(integration_request)
+        integration_request = None
+        
+        if token:
+            integration_requests = frappe.get_all("Integration Request", 
+                filters={"reference_docname": token},
+                fields=["name"])
+                
+            if integration_requests:
+                integration_request = frappe.get_doc("Integration Request", integration_requests[0].name)
+        
+        # If no integration request found, try with response order_id
+        if not integration_request and response_data.get("order_id"):
+            integration_requests = frappe.get_all("Integration Request", 
+                filters={"name": response_data.get("order_id")},
+                fields=["name"])
+                
+            if integration_requests:
+                integration_request = frappe.get_doc("Integration Request", integration_requests[0].name)
+        
+        if not integration_request:
+            frappe.log_error(f"Integration request not found for token: {token}", "CCAvenue Payment Error")
+            frappe.local.response["type"] = "redirect"
+            frappe.local.response["location"] = get_url("payment-failed")
+            return
+            
         # Update the data with the response from CCAvenue
         data = json.loads(integration_request.data)
         data.update({
@@ -266,8 +297,8 @@ def verify_transaction():
             "failure_message": response_data.get("failure_message"),
             "ccavenue_response": response_data
         })
-        
 
+ 
         # Create a new controller instance
         controller = frappe.get_doc("CCAvenue Settings")
         controller.data = frappe._dict(data)
@@ -280,15 +311,22 @@ def verify_transaction():
         # Call authorize_payment to complete the flow
         result = controller.authorize_payment()
         
-        # Redirect to success/failure page
+        # Preserve cookies in the redirect
+        redirect_location = get_url(result["redirect_to"])
+        
+        # Set the cookie preservation flag before redirecting
         frappe.local.response["type"] = "redirect"
-        frappe.local.response["location"] = get_url(result["redirect_to"])
+        frappe.local.response["location"] = redirect_location
+        
+        # Important: Set this flag to preserve cookies during redirect
+        frappe.flags.preserve_cookies = True
         
     except Exception:
         frappe.log_error(frappe.get_traceback(), "CCAvenue Payment Verification Error")
         frappe.local.response["type"] = "redirect"
         frappe.local.response["location"] = get_url("payment-failed")
-
+        # Also preserve cookies on error
+        frappe.flags.preserve_cookies = True
 
 @frappe.whitelist(allow_guest=True)
 def get_api_key():
