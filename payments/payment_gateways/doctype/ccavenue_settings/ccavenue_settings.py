@@ -178,8 +178,6 @@ class CCAvenueSettings(Document):
             }),
             'customer_identifier': kwargs.get('payer_email', '')
         }
-        # Important: Set this flag to preserve cookies during redirect
-        frappe.flags.preserve_cookies = True
 
         # Create the merchant data string exactly as CCAvenue expects
         merchant_data_string = '&'.join([
@@ -219,8 +217,6 @@ class CCAvenueSettings(Document):
 def verify_transaction():
     """Handle CCAvenue's return request after payment"""
     try:
-        print("Inside verfity transaction starting..")
-        print(frappe.session.user)
         # Get the encrypted response from CCAvenue
         encResp = frappe.request.form.get("encResp")
     
@@ -234,7 +230,7 @@ def verify_transaction():
         
         # Decrypt the response
         decrypted_data = decrypt(encResp, settings.get_password(fieldname="encryption_key", raise_exception=False))
-        print(decrypted_data)
+        
         # Parse the decrypted data (URL encoded key-value pairs)
         response_data = {}
         for param in decrypted_data.split('&'):
@@ -245,10 +241,25 @@ def verify_transaction():
         # Extract merchant_param1 and parse the JSON
         merchant_param_str = response_data.get("merchant_param1", "")
         merchant_data = {}
+        user = None
+        
         try:
             # Properly parse the JSON data
             merchant_data = json.loads(merchant_param_str)
-        except:
+            
+            # CRITICAL: Set the session user from merchant_data if available
+            user = merchant_data.get("user")
+            if user and user != "Guest" and frappe.session.user == "Guest":
+                frappe.set_user(user)
+                
+                # Create a new session for the user
+                frappe.local.login_manager.login_as(user)
+                
+                # Log that we've restored the user
+                frappe.logger().info(f"CCAvenue: Restored user session for {user}")
+                
+        except Exception as e:
+            frappe.log_error(f"Error parsing merchant data: {str(e)}")
             # Fallback to manual parsing if JSON parse fails
             if merchant_param_str:
                 parts = merchant_param_str.split(", ")
@@ -259,6 +270,17 @@ def verify_transaction():
                     elif " " in part:
                         k, v = part.split(" ", 1)
                         merchant_data[k.strip()] = v.strip()
+                
+                # Try to get user from manual parsing as well
+                user = merchant_data.get("user")
+                if user and user != "Guest" and frappe.session.user == "Guest":
+                    frappe.set_user(user)
+                    
+                    # Create a new session for the user
+                    frappe.local.login_manager.login_as(user)
+        
+        # For security, log the current user
+        frappe.logger().info(f"CCAvenue callback - Current user: {frappe.session.user}")
                         
         # Get the integration request
         token = merchant_data.get("token")
@@ -266,7 +288,7 @@ def verify_transaction():
         
         if token:
             integration_requests = frappe.get_all("Integration Request", 
-                filters={"reference_docname": token},
+                filters={"name": token},
                 fields=["name"])
                 
             if integration_requests:
@@ -289,6 +311,10 @@ def verify_transaction():
             
         # Update the data with the response from CCAvenue
         data = json.loads(integration_request.data)
+        
+        # Save the user in the integration request data for future reference
+        data["user"] = user or frappe.session.user
+        
         data.update({
             "order_status": response_data.get("order_status"),
             "tracking_id": response_data.get("tracking_id"),
@@ -297,12 +323,15 @@ def verify_transaction():
             "failure_message": response_data.get("failure_message"),
             "ccavenue_response": response_data
         })
-
  
         # Create a new controller instance
         controller = frappe.get_doc("CCAvenue Settings")
         controller.data = frappe._dict(data)
         controller.integration_request = integration_request
+        
+        # Update the integration request with the updated data
+        integration_request.data = json.dumps(data)
+        integration_request.save()
         
         # Set status based on order_status
         if response_data.get("order_status") == "Success":
@@ -313,22 +342,92 @@ def verify_transaction():
         
         # Preserve cookies in the redirect
         redirect_location = get_url(result["redirect_to"])
+
+        # Make sure to authenticate user via session cookie
+        if user and user != "Guest":
+            # Set session cookies explicitly
+            frappe.local.cookie_manager.set_cookie("system_user", user)
+            frappe.local.cookie_manager.set_cookie("full_name", frappe.db.get_value("User", user, "full_name") or "")
+            frappe.local.cookie_manager.set_cookie("user_id", user)
+            frappe.local.cookie_manager.set_cookie("sid", frappe.session.sid)
+            
+        # Set the cookies in response
+        frappe.local.response["set_cookie"] = frappe.local.cookie_manager.cookies
         
-        # Set the cookie preservation flag before redirecting
+        # Set the redirect with cookie preservation
         frappe.local.response["type"] = "redirect"
         frappe.local.response["location"] = redirect_location
         
-        # Important: Set this flag to preserve cookies during redirect
-        frappe.flags.preserve_cookies = True
-        
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), "CCAvenue Payment Verification Error")
+    except Exception as e:
+        frappe.log_error(f"{str(e)}\n{frappe.get_traceback()}", "CCAvenue Payment Verification Error")
         frappe.local.response["type"] = "redirect"
         frappe.local.response["location"] = get_url("payment-failed")
-        # Also preserve cookies on error
-        frappe.flags.preserve_cookies = True
 
 @frappe.whitelist(allow_guest=True)
 def get_api_key():
     """Get CCAvenue API key (access code)"""
     return frappe.db.get_single_value("CCAvenue Settings", "access_code")
+
+@frappe.whitelist(allow_guest=True)
+def restore_user_session():
+    """Attempt to restore user session from stored payment data"""
+    try:
+        # Check if we can get the user from URL params
+        reference_doctype = frappe.form_dict.get("reference_doctype")
+        reference_docname = frappe.form_dict.get("reference_docname")
+        
+        if reference_doctype and reference_docname:
+            # Find the most recent integration request for this reference
+            integration_requests = frappe.get_all("Integration Request",
+                filters={
+                    "reference_doctype": reference_doctype,
+                    "reference_docname": reference_docname,
+                    "status": ["in", ["Completed", "Authorized"]]
+                },
+                order_by="creation desc",
+                limit=1)
+                
+            if integration_requests:
+                integration_request = frappe.get_doc("Integration Request", integration_requests[0].name)
+                data = json.loads(integration_request.data)
+                
+                # Try to extract user from data
+                user = None
+                
+                # First try to get from integration request data
+                if data.get("user"):
+                    user = data.get("user")
+                
+                # Next try merchant_param1 in data
+                if not user:
+                    merchant_data = {}
+                    try:
+                        if data.get("merchant_param1"):
+                            merchant_data = json.loads(data["merchant_param1"])
+                    except:
+                        pass
+                    
+                    user = merchant_data.get("user")
+                
+                if user and user != "Guest":
+                    # Create a new session for the user
+                    frappe.set_user(user)
+                    
+                    # Create a session using login_manager
+                    frappe.local.login_manager.login_as(user)
+                    
+                    # Set session cookies
+                    frappe.local.cookie_manager.set_cookie("system_user", user)
+                    frappe.local.cookie_manager.set_cookie("full_name", frappe.db.get_value("User", user, "full_name") or "")
+                    frappe.local.cookie_manager.set_cookie("user_id", user)
+                    frappe.local.cookie_manager.set_cookie("sid", frappe.session.sid)
+                    
+                    # Set cookies in response
+                    frappe.local.response["set_cookie"] = frappe.local.cookie_manager.cookies
+                    
+                    return {"success": True, "user": user}
+        
+        return {"success": False}
+    except Exception as e:
+        frappe.log_error(f"Session restoration error: {str(e)}\n{frappe.get_traceback()}")
+        return {"success": False, "error": str(e)}

@@ -13,6 +13,10 @@ app_license = "MIT"
 # include js, css files in header of desk.html
 # app_include_css = "/assets/pay/css/pay.css"
 # app_include_js = "/assets/pay/js/pay.js"
+app_include_js = [
+    # ...existing entries...
+    "payments/public/js/ccavenue_session_handler.js"
+]
 
 # include js, css files in header of web template
 # web_include_css = "/assets/pay/css/pay.css"
