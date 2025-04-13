@@ -21,7 +21,7 @@ def get_context(context):
         
         # Generate CCAvenue payment form data
         ccavenue_settings = frappe.get_doc("CCAvenue Settings")
-        context.payment_data = ccavenue_settings.create_encrypted_request_data(**payment_details)
+        context.payment_data = ccavenue_settings.create_encrypted_request_data(doc.name, **payment_details)
         
         # Set API URL based on environment
         context.api_url = ccavenue_settings.get_api_url()
