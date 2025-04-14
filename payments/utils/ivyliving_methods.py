@@ -1,7 +1,5 @@
-from duckdb.duckdb import order
-from openpyxl.styles.builtins import currency
-
 import frappe
+from frappe import _
 import json
 
 def handle_payment_authorization_payment_request(doc, method, status):
@@ -97,18 +95,33 @@ def handle_payment_authorization_customer(doc, method, status):
     item_codes_and_prices = [item.strip() for item in items_part.split(",")]
     item_codes = [item.split("=")[0].strip() for item in item_codes_and_prices]
     item_prices = [item.split("=")[1].strip() for item in item_codes_and_prices]
+    merchant_name = request_data.get("custom_merchant_name")
+    merchant_dict = {}
+    if merchant_name:
+        merchant_dict = frappe.get_doc("CCAvenue Merchant", merchant_name).as_dict()
     total_amount = 0
     for item_price in item_prices:
         total_amount = total_amount + float(item_price)
 
     company = doc.custom_hostel_name
+    debtors_account_name = "Debtors"
+    bank_account_name = "CCAvenue"
+    if merchant_name and merchant_dict:
+        if merchant_dict.get("company") is not None and merchant_dict.get("company") != "":
+            company = merchant_dict.get("company")
+        if merchant_dict.get("bank_account") is not None and merchant_dict.get("bank_account") != "":
+            bank_account_name = merchant_dict.get("bank_account")
+        if merchant_dict.get("debtors_account") is not None and merchant_dict.get("debtors_account") != "":
+            debtors_account_name = merchant_dict.get("debtors_account")
+        remarks = remarks + f" for merchant name = {merchant_name}"
     default_currency = frappe.db.get_value("Company", company, "default_currency")
     company_abbr = frappe.db.get_value("Company", company, "abbr")
 
     source_exchange_rate = 1
 
-    debtors_account = f"Debtors - {company_abbr}"
-    bank_account = f"CCAvenue - {company_abbr}"
+    debtors_account = f"{debtors_account_name} - {company_abbr}"
+    bank_account = f"{bank_account_name} - {company_abbr}"
+    print(company, debtors_account, bank_account)
 
     try:
         payment_entry = frappe.get_doc({
@@ -229,28 +242,32 @@ def handle_cart_submit():
         frappe.throw(_("Invalid cart data. Must be a list."))
 
     total_amount = 0.0
-    item_codes = []
-    item_list = []
+    merchant_name = None
+    item_code_and_price = []
     for item in cart_data:
         if not isinstance(item, dict) or 'itemCode' not in item or 'price' not in item:
             frappe.response['success'] = False
             frappe.response['message'] = "Invalid item in cart.  Each item must have itemCode and price."
             frappe.throw(_("Invalid item data. Each item must be a dictionary with a 'itemCode' and 'price'."))
 
-        item_price = item['price']
+        item_doc = frappe.get_doc("Item", item["itemCode"]).as_dict()
+        print(item_doc)
+        local_merchant_name = item_doc.get("custom_merchant_account")
+        if merchant_name is not None and local_merchant_name != merchant_name :
+            frappe.response['success'] = False
+            frappe.response['message'] = "Invalid merchant name. All items must have the same merchant name."
+            frappe.throw(_("Invalid merchant name. All items must have the same merchant name."))
 
-        total_amount = total_amount + float(item_price)
-        item_codes.append(item['itemCode'])
-        item_list.append({'item_code': item['itemCode'], 'price': item_price})
+        if local_merchant_name:
+            merchant_name = local_merchant_name
+
+        total_amount = total_amount + float(item['price'])
+        item_code_and_price.append(f"{item['itemCode']} = {round(item['price'], 2)}")
 
     if total_amount <= 0:
         frappe.response['success'] = False
         frappe.response['message'] = "Total amount must be greater than zero."
         frappe.throw(_("Total amount must be greater than zero."))
-
-    item_code_and_price = []
-    for item in item_list:
-        item_code_and_price.append(f"{item['item_code']} = {round(item['price'], 2)}")
 
     if remarks is None:
         remarks = f"Items: {', '.join(item_code_and_price)} | Student ID: {customer_id}"
@@ -261,8 +278,6 @@ def handle_cart_submit():
         controller = frappe.get_doc("CCAvenue Settings")
 
         customer = frappe.get_doc("Customer", customer_id)
-
-        receipt = f'OP-{customer_id}'
 
         total_money_to_pay = int(total_amount)
 
@@ -275,7 +290,8 @@ def handle_cart_submit():
             payer_email=frappe.session.user,
             payment_gateway="CCAvenue",
             reference_docname=customer.name,
-            reference_doctype="Customer"
+            reference_doctype="Customer",
+            custom_merchant_name=merchant_name,
         )
 
 
