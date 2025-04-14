@@ -1,3 +1,6 @@
+from duckdb.duckdb import order
+from openpyxl.styles.builtins import currency
+
 import frappe
 import json
 
@@ -88,7 +91,8 @@ def handle_payment_authorization_customer(doc, method, status):
     )
     request_data = json.loads(integration_request)
 
-    remarks = request_data.get("notes", {}).get("remarks", "")
+    print(request_data)
+    remarks = request_data.get("description","")
     items_part = remarks.split("Items:")[1].split("|")[0].strip()
     item_codes_and_prices = [item.strip() for item in items_part.split(",")]
     item_codes = [item.split("=")[0].strip() for item in item_codes_and_prices]
@@ -208,7 +212,84 @@ def handle_payment_authorization_customer(doc, method, status):
 
 @frappe.whitelist(allow_guest=True)
 def handle_cart_submit():
-    cart_data = frappe.form_dict.get('cart')
-    customer_id = frappe.form_dict.get('customer')
-    print(cart_data)
-    print(customer_id)
+    data = json.loads(frappe.form_dict.get("requestObj"))
+    cart_data = data.get("cart")
+    customer_id = data.get("customer")
+    remarks = None
+
+    # --- Validate Inputs ---
+    if not cart_data or not customer_id:
+        frappe.response['success'] = False
+        frappe.response['message'] = "Missing required parameters: cart and customer."
+        frappe.throw(_("Missing required parameters: cart and customer."))
+
+    if not isinstance(cart_data, list):
+        frappe.response['success'] = False
+        frappe.response['message'] = "Invalid cart data.  Must be a list."
+        frappe.throw(_("Invalid cart data. Must be a list."))
+
+    total_amount = 0.0
+    item_codes = []
+    item_list = []
+    for item in cart_data:
+        if not isinstance(item, dict) or 'itemCode' not in item or 'price' not in item:
+            frappe.response['success'] = False
+            frappe.response['message'] = "Invalid item in cart.  Each item must have itemCode and price."
+            frappe.throw(_("Invalid item data. Each item must be a dictionary with a 'itemCode' and 'price'."))
+
+        item_price = item['price']
+
+        total_amount = total_amount + float(item_price)
+        item_codes.append(item['itemCode'])
+        item_list.append({'item_code': item['itemCode'], 'price': item_price})
+
+    if total_amount <= 0:
+        frappe.response['success'] = False
+        frappe.response['message'] = "Total amount must be greater than zero."
+        frappe.throw(_("Total amount must be greater than zero."))
+
+    item_code_and_price = []
+    for item in item_list:
+        item_code_and_price.append(f"{item['item_code']} = {round(item['price'], 2)}")
+
+    if remarks is None:
+        remarks = f"Items: {', '.join(item_code_and_price)} | Student ID: {customer_id}"
+    else:
+        remarks = f"{remarks} | Items: {', '.join(item_code_and_price)} | Student ID: {customer_id}"
+
+    try:
+        controller = frappe.get_doc("CCAvenue Settings")
+
+        customer = frappe.get_doc("Customer", customer_id)
+
+        receipt = f'OP-{customer_id}'
+
+        total_money_to_pay = int(total_amount)
+
+        payment_url = controller.get_payment_url(
+            amount=total_money_to_pay,
+            currency="INR",
+            description=remarks,
+            order_id = customer.customer_name,
+            payer_name=customer.customer_name,
+            payer_email=frappe.session.user,
+            payment_gateway="CCAvenue",
+            reference_docname=customer.name,
+            reference_doctype="Customer"
+        )
+
+
+        if not payment_url:
+            frappe.response['success'] = False
+            frappe.response['message'] = "Failed to create Razorpay order."
+            frappe.throw(_("Failed to create Razorpay order."))
+
+        frappe.response['success'] = True
+        frappe.response['message'] = "Order created successfully."
+        frappe.response['payment_url'] = payment_url
+
+
+    except Exception as e:
+        frappe.log_error("Razorpay Order Creation Error", str(e))
+        frappe.response['success'] = False
+        frappe.response['message'] = f"An error occurred while creating the payment order: {str(e)}"
