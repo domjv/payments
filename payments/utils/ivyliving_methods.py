@@ -72,13 +72,6 @@ def handle_payment_authorization_payment_request(doc, method, status):
             message=str(e)
         )
 
-    else:
-        frappe.log_error(
-            f"Payment Request {doc.name} status is not 'Paid', skipping Payment Entry."
-        )
-
-
-
 def handle_payment_authorization_customer(doc, method, status):
     customer = frappe.get_doc(doc)
     print(customer)
@@ -251,15 +244,16 @@ def handle_cart_submit():
             frappe.throw(_("Invalid item data. Each item must be a dictionary with a 'itemCode' and 'price'."))
 
         item_doc = frappe.get_doc("Item", item["itemCode"]).as_dict()
-        print(item_doc)
         local_merchant_name = item_doc.get("custom_merchant_account")
-        if merchant_name is not None and local_merchant_name != merchant_name :
+        if (merchant_name != "" and local_merchant_name != merchant_name) or ( merchant_name == "" and local_merchant_name is not None ) :
             frappe.response['success'] = False
             frappe.response['message'] = "Invalid merchant name. All items must have the same merchant name."
-            frappe.throw(_("Invalid merchant name. All items must have the same merchant name."))
+            return
 
-        if local_merchant_name:
+        if local_merchant_name is not None:
             merchant_name = local_merchant_name
+        else:
+            merchant_name = ""
 
         total_amount = total_amount + float(item['price'])
         item_code_and_price.append(f"{item['itemCode']} = {round(item['price'], 2)}")

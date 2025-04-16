@@ -262,9 +262,10 @@ def verify_transaction():
     try:
         # Get the encrypted response from CCAvenue
         encResp = frappe.request.form.get("encResp")
-        merchant_name_encoded = frappe.request.query_string.decode('utf-8').split('=')[1]
-        merchant_name =  urllib.parse.unquote(merchant_name_encoded)
-        print(merchant_name)
+        merchant_name = None
+        if frappe.request.query_string.decode("utf-8") != '':
+            merchant_name_encoded = frappe.request.query_string.decode('utf-8').split('=')[1]
+            merchant_name =  urllib.parse.unquote(merchant_name_encoded)
         if not encResp:
             frappe.local.response["type"] = "redirect"
             frappe.local.response["location"] = get_url("payment-failed")
