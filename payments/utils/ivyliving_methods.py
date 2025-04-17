@@ -4,7 +4,6 @@ import json
 
 def handle_payment_authorization_payment_request(doc, method, status):
     payment_request = frappe.get_doc(doc)
-    print(payment_request)
     company = doc.company
     default_currency = frappe.db.get_value("Company", company, "default_currency")
 
@@ -31,7 +30,6 @@ def handle_payment_authorization_payment_request(doc, method, status):
     reference_no = "INV-0001"
 
     if integration_request:
-        print(json.loads(integration_request))
         reference_no = json.loads(integration_request).get("tracking_id")
 
     try:
@@ -74,7 +72,6 @@ def handle_payment_authorization_payment_request(doc, method, status):
 
 def handle_payment_authorization_customer(doc, method, status):
     customer = frappe.get_doc(doc)
-    print(customer)
     integration_request = frappe.db.get_value(
         "Integration Request",
         {"reference_doctype": "Customer", "reference_docname": doc.name},
@@ -82,7 +79,6 @@ def handle_payment_authorization_customer(doc, method, status):
     )
     request_data = json.loads(integration_request)
 
-    print(request_data)
     remarks = request_data.get("description","")
     items_part = remarks.split("Items:")[1].split("|")[0].strip()
     item_codes_and_prices = [item.strip() for item in items_part.split(",")]
@@ -114,7 +110,6 @@ def handle_payment_authorization_customer(doc, method, status):
 
     debtors_account = f"{debtors_account_name} - {company_abbr}"
     bank_account = f"{bank_account_name} - {company_abbr}"
-    print(company, debtors_account, bank_account)
 
     try:
         payment_entry = frappe.get_doc({
@@ -245,7 +240,7 @@ def handle_cart_submit():
 
         item_doc = frappe.get_doc("Item", item["itemCode"]).as_dict()
         local_merchant_name = item_doc.get("custom_merchant_account")
-        if (merchant_name != "" and local_merchant_name != merchant_name) or ( merchant_name == "" and local_merchant_name is not None ) :
+        if (merchant_name is not None and merchant_name != "" and local_merchant_name != merchant_name) or ( merchant_name == "" and local_merchant_name is not None ) :
             frappe.response['success'] = False
             frappe.response['message'] = "Invalid merchant name. All items must have the same merchant name."
             return
@@ -273,8 +268,7 @@ def handle_cart_submit():
 
         customer = frappe.get_doc("Customer", customer_id)
 
-        total_money_to_pay = int(total_amount)
-
+        total_money_to_pay = round(total_amount, 2)
         payment_url = controller.get_payment_url(
             amount=total_money_to_pay,
             currency="INR",
