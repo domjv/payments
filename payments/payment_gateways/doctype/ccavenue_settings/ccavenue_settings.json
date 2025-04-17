@@ -1,0 +1,94 @@
+{
+    "actions": [],
+    "creation": "2024-06-04 00:00:00.000000",
+    "doctype": "DocType",
+    "editable_grid": 1,
+    "engine": "InnoDB",
+    "field_order": [
+      "credentials_section",
+      "merchant_id",
+      "access_code",
+      "encryption_key",
+      "environment",
+      "integration_settings_section",
+      "redirect_to",
+      "api_header_section",
+      "header_img"
+    ],
+    "fields": [
+      {
+        "fieldname": "credentials_section",
+        "fieldtype": "Section Break",
+        "label": "Credentials"
+      },
+      {
+        "fieldname": "merchant_id",
+        "fieldtype": "Data",
+        "label": "Merchant ID",
+        "reqd": 1
+      },
+      {
+        "fieldname": "access_code",
+        "fieldtype": "Data",
+        "label": "Access Code",
+        "reqd": 1
+      },
+      {
+        "fieldname": "encryption_key",
+        "fieldtype": "Password",
+        "label": "Encryption Key",
+        "reqd": 1
+      },
+      {
+        "default": "Sandbox",
+        "fieldname": "environment",
+        "fieldtype": "Select",
+        "label": "Environment",
+        "options": "Sandbox\nProduction",
+        "reqd": 1
+      },
+      {
+        "fieldname": "integration_settings_section",
+        "fieldtype": "Section Break",
+        "label": "Integration Settings"
+      },
+      {
+        "description": "Mention transaction completion page URL",
+        "fieldname": "redirect_to",
+        "fieldtype": "Data",
+        "label": "Redirect To"
+      },
+      {
+        "fieldname": "api_header_section",
+        "fieldtype": "Section Break",
+        "label": "API Header"
+      },
+      {
+        "fieldname": "header_img",
+        "fieldtype": "Attach Image",
+        "label": "Header Image"
+      }
+    ],
+    "issingle": 1,
+    "links": [],
+    "modified": "2024-06-04 00:00:00.000000",
+    "modified_by": "Administrator",
+    "module": "Payment Gateways",
+    "name": "CCAvenue Settings",
+    "owner": "Administrator",
+    "permissions": [
+      {
+        "create": 1,
+        "delete": 1,
+        "email": 1,
+        "print": 1,
+        "read": 1,
+        "role": "System Manager",
+        "share": 1,
+        "write": 1
+      }
+    ],
+    "sort_field": "modified",
+    "sort_order": "DESC",
+    "track_changes": 1
+  }

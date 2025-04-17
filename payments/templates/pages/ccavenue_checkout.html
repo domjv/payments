@@ -1,0 +1,30 @@
+{% block script %}
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
+{% endblock %} {%- block page_content -%}
+    <div style="justify-self: center">
+
+    <iframe
+            width="482"
+            height="500"
+            scrolling="No"
+            frameborder="0"
+            id="paymentFrame"
+            src="{{ api_url }}&merchant_id={{ payment_data.merchant_id }}&encRequest={{ payment_data.encRequest }}&access_code={{ payment_data.access_code }}"
+    >
+    </div>
+{% endblock %}
+{% block style %}
+    <style>
+
+        body {
+            justify-self: center;
+        }
+
+        iframe#paymentFrame {
+            max-width: fit-content;
+            margin-left: auto;
+            margin-right: auto;
+            min-height: 500px;
+        }
+    </style>
+{% endblock %}
