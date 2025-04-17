@@ -51,13 +51,14 @@ For CCAvenue payment status is Completed
 """
 
 import json
-from urllib.parse import urlencode
+import urllib
+from urllib.parse import urlencode, quote_plus
 
 import frappe
 from frappe import _
 from frappe.integrations.utils import create_request_log
 from frappe.model.document import Document
-from frappe.utils import call_hook_method
+from frappe.utils import call_hook_method, random_string
 from frappe.utils.data import get_url
 
 from payments.payment_gateways.doctype.ccavenue_settings.ccavenue_utils import decrypt, encrypt
@@ -163,6 +164,45 @@ class CCAvenueSettings(Document):
         """Create encrypted data for CCAvenue request"""
         # Format the data as required by CCAvenue
         token = kwargs.get('order_id') + "@" + integration_request_name
+        merchant_name = kwargs.get('custom_merchant_name')
+        if merchant_name:
+            merchant_doc = frappe.get_doc("CCAvenue Merchant", merchant_name)
+            merchant_dict = merchant_doc.as_dict()
+            merchant_data = {
+                'merchant_id': merchant_dict.get('merchant_id'),
+                'order_id': token,
+                'currency': kwargs.get('currency', 'INR'),
+                'amount': str(kwargs.get('amount')),
+                'redirect_url': get_url(
+                    f"/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.verify_transaction?merchant={merchant_name}"),
+                'cancel_url': get_url(
+                    f"/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.verify_transaction?merchant={merchant_name}"),
+                'language': 'EN',
+                'integration_type': 'iframe_normal',
+                "merchant_param1": json.dumps({
+                    "reference_doctype": kwargs.get("reference_doctype"),
+                    "reference_docname": kwargs.get("reference_docname"),
+                    "token": token,
+                    "user": frappe.session.user  # Add the current user
+                }),
+                'customer_identifier': kwargs.get('payer_email', '')
+            }
+
+            merchant_data_string = '&'.join([
+                f"{key}={value}" for key, value in merchant_data.items()
+            ])
+            merchant_data_string = merchant_data_string + '&'
+
+            # Encrypt the data using CCAvenue's encryption method
+            encrypted_data = encrypt(merchant_data_string,
+                                     merchant_doc.get_password(fieldname="encryption_key", raise_exception=False))
+
+            return {
+                "encRequest": encrypted_data,
+                "access_code": merchant_dict.get('access_code'),
+                "merchant_id": merchant_dict.get('merchant_id'),
+                "non_encrypted_data": merchant_data_string
+            }
         merchant_data = {
             'merchant_id': self.merchant_id,
             'order_id': token,
@@ -223,6 +263,10 @@ def verify_transaction():
     try:
         # Get the encrypted response from CCAvenue
         encResp = frappe.request.form.get("encResp")
+        merchant_name = None
+        if frappe.request.query_string.decode("utf-8") != '':
+            merchant_name_encoded = frappe.request.query_string.decode('utf-8').split('=')[1]
+            merchant_name =  urllib.parse.unquote(merchant_name_encoded)
         if not encResp:
             frappe.local.response["type"] = "redirect"
             frappe.local.response["location"] = get_url("payment-failed")
@@ -232,7 +276,11 @@ def verify_transaction():
         settings = frappe.get_doc("CCAvenue Settings")
 
         # Decrypt the response
-        decrypted_data = decrypt(encResp, settings.get_password(fieldname="encryption_key", raise_exception=False))
+        if merchant_name:
+            merchat_doc = frappe.get_doc("CCAvenue Merchant", merchant_name)
+            decrypted_data = decrypt(encResp, merchat_doc.get_password(fieldname="encryption_key", raise_exception=False))
+        else:
+            decrypted_data = decrypt(encResp, settings.get_password(fieldname="encryption_key", raise_exception=False))
 
         # Parse the decrypted data (URL encoded key-value pairs)
         response_data = {}

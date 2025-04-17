@@ -110,6 +110,14 @@ override_doctype_class = {"Web Form": "payments.overrides.payment_webform.Paymen
 # 		"on_trash": "method"
 # 	}
 # }
+doc_events = {
+	"Payment Request": {
+		"on_payment_authorized":"payments.utils.ivyliving_methods.handle_payment_authorization_payment_request"
+	},
+	"Customer":{
+		"on_payment_authorized":"payments.utils.ivyliving_methods.handle_payment_authorization_customer"
+	}
+}
 
 # Scheduled Tasks
 # ---------------
