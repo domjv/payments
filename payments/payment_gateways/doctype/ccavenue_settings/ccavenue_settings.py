@@ -311,7 +311,10 @@ def verify_transaction():
 
         # Update the integration request with the updated data
         integration_request.data = json.dumps(data)
-        integration_request.save()
+        
+        # Use ignore_permissions=True to bypass permission checks
+        integration_request.save(ignore_permissions=True)
+
 
         # Set status based on order_status
         if response_data.get("order_status") == "Success":
