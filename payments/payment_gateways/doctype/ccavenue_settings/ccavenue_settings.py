@@ -185,7 +185,14 @@ class CCAvenueSettings(Document):
                     "token": token,
                     "user": frappe.session.user  # Add the current user
                 }),
-                'customer_identifier': kwargs.get('payer_email', '')
+                'customer_identifier': kwargs.get('payer_email', ''),
+                'billing_name': kwargs.get('payer_name',' '),
+                'billing_address':kwargs.get('payer_name',' '),
+                'billing_city':kwargs.get('payer_name',' '),
+                'billing_zip':kwargs.get('payer_name',' '),
+                'billing_state':kwargs.get('payer_name',' '),
+                'billing_email':frappe.session.user,
+                'billing_country':'india'
             }
 
             merchant_data_string = '&'.join([
@@ -220,7 +227,14 @@ class CCAvenueSettings(Document):
                 "token": token,
                 "user": frappe.session.user  # Add the current user
             }),
-            'customer_identifier': kwargs.get('payer_email', '')
+            'customer_identifier': kwargs.get('payer_email', ''),
+            'billing_name': kwargs.get('payer_name',' '),
+            'billing_address':kwargs.get('payer_name',' '),
+            'billing_city':kwargs.get('payer_name',' '),
+            'billing_zip':kwargs.get('payer_name',' '),
+            'billing_state':kwargs.get('payer_name',' '),
+            'billing_email':frappe.session.user,
+            'billing_country':'india'
         }
 
         # Create the merchant data string exactly as CCAvenue expects
