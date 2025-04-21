@@ -165,6 +165,8 @@ class CCAvenueSettings(Document):
         # Format the data as required by CCAvenue
         token = kwargs.get('order_id') + "@" + integration_request_name
         merchant_name = kwargs.get('custom_merchant_name')
+        customer_name = kwargs.get('payer_name')
+        customer_dict = frappe.get_doc("Customer", customer_name).as_dict()
         if merchant_name:
             merchant_doc = frappe.get_doc("CCAvenue Merchant", merchant_name)
             merchant_dict = merchant_doc.as_dict()
@@ -186,11 +188,11 @@ class CCAvenueSettings(Document):
                     "user": frappe.session.user  # Add the current user
                 }),
                 'customer_identifier': kwargs.get('payer_email', ''),
-                'billing_name': kwargs.get('payer_name',' '),
-                'billing_address':kwargs.get('payer_name',' '),
-                'billing_city':kwargs.get('payer_name',' '),
-                'billing_zip':kwargs.get('payer_name',' '),
-                'billing_state':kwargs.get('payer_name',' '),
+                'billing_name': customer_name,
+                'billing_address':f'{customer_dict.get("custom_house_no__floor", "")} + {customer_dict.get("custom_building__block_number", "")} + {customer_dict.get("custom_landmark__area_name", "")}',
+                'billing_city':customer_dict.get('custom_city', "NA"),
+                'billing_zip':kwargs.get('custom_pincode','NA'),
+                'billing_state':kwargs.get('custom_pincode','NA'),
                 'billing_email':frappe.session.user,
                 'billing_country':'india'
             }
@@ -228,11 +230,11 @@ class CCAvenueSettings(Document):
                 "user": frappe.session.user  # Add the current user
             }),
             'customer_identifier': kwargs.get('payer_email', ''),
-            'billing_name': kwargs.get('payer_name',' '),
-            'billing_address':kwargs.get('payer_name',' '),
-            'billing_city':kwargs.get('payer_name',' '),
-            'billing_zip':kwargs.get('payer_name',' '),
-            'billing_state':kwargs.get('payer_name',' '),
+            'billing_name': customer_name,
+            'billing_address':f'{customer_dict.get("custom_house_no__floor", "")} + {customer_dict.get("custom_building__block_number", "")} + {customer_dict.get("custom_landmark__area_name", "")}',
+            'billing_city':customer_dict.get('custom_city', "NA"),
+            'billing_zip':kwargs.get('custom_pincode','NA'),
+            'billing_state':kwargs.get('custom_pincode','NA'),
             'billing_email':frappe.session.user,
             'billing_country':'india'
         }
