@@ -167,14 +167,23 @@ class CCAvenueSettings(Document):
         merchant_name = kwargs.get('custom_merchant_name')
         customer_name = kwargs.get('payer_name')
         customer_dict = frappe.get_doc("Customer", customer_name).as_dict()
+        charge_list = frappe.get_all("Payment Charge",filters={'disabled':0},fields=['*'])
+        outstanding_amount = kwargs.get('amount')
+        total_charges = 0
+        for charge in charge_list:
+            charge_amount = (outstanding_amount * charge.charge_percent / 100)
+            charge['calculated_amount'] = charge_amount
+            total_charges = total_charges + charge_amount
+        final_amount = outstanding_amount + total_charges
+
         if merchant_name:
             merchant_doc = frappe.get_doc("CCAvenue Merchant", merchant_name)
             merchant_dict = merchant_doc.as_dict()
             merchant_data = {
                 'merchant_id': merchant_dict.get('merchant_id'),
                 'order_id': token,
-                'currency': kwargs.get('currency', 'INR'),
-                'amount': str(kwargs.get('amount')),
+                'currency': kwargs.get('currency' , 'INR'),
+                'amount': str(final_amount),
                 'redirect_url': get_url(
                     f"/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.verify_transaction?merchant={merchant_name}"),
                 'cancel_url': get_url(
@@ -216,7 +225,7 @@ class CCAvenueSettings(Document):
             'merchant_id': self.merchant_id,
             'order_id': token,
             'currency': kwargs.get('currency', 'INR'),
-            'amount': str(kwargs.get('amount')),
+            'amount': str(final_amount),
             'redirect_url': get_url(
                 "/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.verify_transaction"),
             'cancel_url': get_url(
