@@ -26,7 +26,7 @@
    "in_standard_filter": 1,
    "label": "Charge Percent",
    "non_negative": 1,
-   "precision": "2",
+   "precision": "9",
    "reqd": 1
   },
   {
@@ -43,7 +43,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-04-23 16:38:53.534519",
+ "modified": "2025-04-25 10:56:12.960089",
  "modified_by": "Administrator",
  "module": "Payments",
  "name": "Payment Charge",

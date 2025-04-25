@@ -53,12 +53,13 @@ For CCAvenue payment status is Completed
 import json
 import urllib
 from urllib.parse import urlencode, quote_plus
+import math
 
 import frappe
 from frappe import _
 from frappe.integrations.utils import create_request_log
 from frappe.model.document import Document
-from frappe.utils import call_hook_method, random_string
+from frappe.utils import call_hook_method
 from frappe.utils.data import get_url
 
 from payments.payment_gateways.doctype.ccavenue_settings.ccavenue_utils import decrypt, encrypt
@@ -172,7 +173,7 @@ class CCAvenueSettings(Document):
         total_charges = 0
         for charge in charge_list:
             charge_amount = (outstanding_amount * charge.charge_percent / 100)
-            charge['calculated_amount'] = charge_amount
+            charge_amount = math.ceil(charge_amount * 100) / 100
             total_charges = total_charges + charge_amount
         final_amount = outstanding_amount + total_charges
 
