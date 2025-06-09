@@ -177,7 +177,6 @@ class CCAvenueSettings(Document):
             charge_amount = (outstanding_amount * charge.charge_percent / 100)
             charge_amount = math.ceil(charge_amount * 100) / 100
             total_charges = total_charges + charge_amount
-            log_message += f"Charge: {charge.name}\n"
             log_message += f"Charge Percent: {charge.charge_percent}%\n"
             log_message += f"Charge Amount: {charge_amount}\n"
         log_message += f"Total Charges: {total_charges}\n"
