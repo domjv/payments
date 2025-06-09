@@ -171,17 +171,13 @@ class CCAvenueSettings(Document):
         charge_list = frappe.get_all("Payment Charge",filters={'disabled':0},fields=['*'])
         outstanding_amount = kwargs.get('amount')
         total_charges = 0
-        log_message = "\n=== Payment Charge Details ===\n"
-        log_message += f"Original Amount: {outstanding_amount}\n"
+        log_message = f"CCAvenue Charges - Original: {outstanding_amount}, "
         for charge in charge_list:
             charge_amount = (outstanding_amount * charge.charge_percent / 100)
             charge_amount = math.ceil(charge_amount * 100) / 100
             total_charges = total_charges + charge_amount
-            log_message += f"Charge Percent: {charge.charge_percent}%\n"
-            log_message += f"Charge Amount: {charge_amount}\n"
-        log_message += f"Total Charges: {total_charges}\n"
-        log_message += f"Final Amount: {outstanding_amount + total_charges}\n"
-        log_message += "===========================\n"
+            log_message += f"Charge: {charge.charge_percent}%={charge_amount}, "
+        log_message += f"Total: {total_charges}, Final: {outstanding_amount + total_charges}"
         frappe.log_error(log_message)
         final_amount = outstanding_amount + total_charges
 
