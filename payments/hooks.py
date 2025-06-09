@@ -112,14 +112,14 @@ override_doctype_class = {"Web Form": "payments.overrides.payment_webform.Paymen
 # }
 
 # TODO: Uncomment this before going live on CCAvenue payemnts on IVY Living
-doc_events = {
-	"Payment Request": {
-		"on_payment_authorized":"payments.utils.ivyliving_methods.handle_payment_authorization_payment_request"
-	},
-	"Customer":{
-		"on_payment_authorized":"payments.utils.ivyliving_methods.handle_payment_authorization_customer"
-	}
-}
+# doc_events = {
+# 	"Payment Request": {
+# 		"on_payment_authorized":"payments.utils.ivyliving_methods.handle_payment_authorization_payment_request"
+# 	},
+# 	"Customer":{
+# 		"on_payment_authorized":"payments.utils.ivyliving_methods.handle_payment_authorization_customer"
+# 	}
+# }
 
 # Scheduled Tasks
 # ---------------
