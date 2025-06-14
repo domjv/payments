@@ -4,6 +4,8 @@ import click
 import frappe
 from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+from Crypto.Cipher import AES
+import base64
 
 
 def validate_integration_request(docname: str | None):
@@ -182,6 +184,14 @@ def delete_custom_fields():
 			frappe.db.delete("Custom Field", {"name": "Web Form-" + fieldname})
 
 		frappe.clear_cache(doctype="Web Form")
+
+def pad(data): return data + (16 - len(data) % 16) * chr(16 - len(data) % 16)
+def unpad(data): return data[:-ord(data[-1])]
+
+def decrypt(encResp, working_key):
+    enc = base64.b64decode(encResp)
+    cipher = AES.new(working_key.encode("utf-8"), AES.MODE_ECB)
+    return unpad(cipher.decrypt(enc).decode("utf-8"))
 
 
 def before_install():

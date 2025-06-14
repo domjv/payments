@@ -139,7 +139,10 @@ before_tests = "erpnext.setup.utils.before_tests"  # To setup company and accoun
 # ------------------------------
 #
 override_whitelisted_methods = {
-	"frappe.website.doctype.web_form.web_form.accept": "payments.overrides.payment_webform.accept"
+	"frappe.website.doctype.web_form.web_form.accept": "payments.overrides.payment_webform.accept",
+    '/api/method/payments.ccavenue.webhook.order_status': 'payments.ccavenue.webhook.order_status',
+    '/api/method/payments.ccavenue.webhook.order_status_echo': 'payments.ccavenue.webhook.order_status_echo',
+    '/api/method/payments.ccavenue.webhook.reconciliation_status': 'payments.ccavenue.webhook.reconciliation_status'
 }
 #
 # each overriding function accepts a `data` argument;

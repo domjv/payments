@@ -166,19 +166,18 @@ class CCAvenueSettings(Document):
         # Format the data as required by CCAvenue
         token = kwargs.get('order_id') + "@" + integration_request_name
         merchant_name = kwargs.get('custom_merchant_name')
-        customer_name = kwargs.get('payer_name')
-        customer_dict = frappe.get_doc("Customer", customer_name).as_dict()
+        customer_name = kwargs.get('payer_name', '').strip()
+        try:
+            customer_dict = frappe.get_doc("Customer", customer_name).as_dict()
+        except frappe.DoesNotExistError:
+            frappe.throw(f"Customer '{customer_name}' not found. Please check the customer details.")
         charge_list = frappe.get_all("Payment Charge",filters={'disabled':0},fields=['*'])
         outstanding_amount = kwargs.get('amount')
         total_charges = 0
-        log_message = f"CCAvenue Charges - Original: {outstanding_amount}, "
         for charge in charge_list:
             charge_amount = (outstanding_amount * charge.charge_percent / 100)
             charge_amount = math.ceil(charge_amount * 100) / 100
             total_charges = total_charges + charge_amount
-            log_message += f"Charge: {charge.charge_percent}%={charge_amount}, "
-        log_message += f"Total: {total_charges}, Final: {outstanding_amount + total_charges}"
-        frappe.log_error(log_message)
         final_amount = outstanding_amount + total_charges
 
         if merchant_name:
@@ -430,6 +429,11 @@ def get_api_key():
     """Get CCAvenue API key (access code)"""
     return frappe.db.get_single_value("CCAvenue Settings", "access_code")
 
+@frappe.whitelist()
+def get_working_key():
+    """Get CCAvenue working key"""
+    settings = frappe.get_single("CCAvenue Settings")
+    return settings.get_password("encryption_key")
 
 @frappe.whitelist(allow_guest=True)
 def restore_user_session():
