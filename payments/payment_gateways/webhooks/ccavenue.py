@@ -96,8 +96,10 @@ def _create_payment_entry(pr, data):
         )
         return
 
-    pe = frappe.get_doc({
-        "doctype": "Payment Entry",
+    pe = frappe.new_doc("Payment Entry")
+    pe.company = company  # 👈 Set early to prevent validation issue
+
+    pe.update({
         "payment_type": "Receive",
         "party_type": pr.party_type,
         "party": pr.party,
