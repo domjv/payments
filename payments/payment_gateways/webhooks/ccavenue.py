@@ -18,10 +18,7 @@ def reconciliation_status():
 def _handle_ccavenue(source):
     try:
         enc_resp = frappe.local.form_dict.get("encResp")
-        frappe.log_error(
-            title="CCAvenue encResp (truncated)" if len(enc_resp) > 140 else "CCAvenue encResp",
-            message=enc_resp[:5000]  # avoid flooding the DB
-        )
+        
         if not enc_resp:
             frappe.log_error("Missing encResp", f"CCAvenue {source}")
             return "Missing encResp"
@@ -32,11 +29,7 @@ def _handle_ccavenue(source):
             return "Missing working key"
         
         decrypted = decrypt(enc_resp, working_key)
-        frappe.log_error(
-            title=f"CCAvenue {source} Decrypted",
-            message=decrypted[:5000]  # safely truncate if huge
-        )
-
+        
         data = dict(item.split('=') for item in decrypted.split('&') if '=' in item)
         _process_payment_update(data)
 
@@ -47,9 +40,6 @@ def _process_payment_update(data):
     order_id = data.get("order_id")
     status = data.get("order_status")
     amount = data.get("amount")
-    frappe.log_error(order_id, "CCAvenue Payment Update Order ID")
-    frappe.log_error(status, "CCAvenue Payment Update Status")
-    frappe.log_error(amount, "CCAvenue Payment Update Amount")
 
     if not order_id or not status:
         frappe.log_error(data, "Missing Order ID or Status")
