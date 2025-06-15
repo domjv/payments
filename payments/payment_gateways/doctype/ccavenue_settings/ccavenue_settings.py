@@ -290,40 +290,37 @@ class CCAvenueSettings(Document):
 def verify_transaction():
     """Handle CCAvenue's return request after payment"""
     try:
-        # Get the encrypted response from CCAvenue
+        # 1. Read encrypted response and merchant name (if any)
         encResp = frappe.request.form.get("encResp")
         merchant_name = None
         if frappe.request.query_string.decode("utf-8") != '':
             merchant_name_encoded = frappe.request.query_string.decode('utf-8').split('=')[1]
-            merchant_name =  urllib.parse.unquote(merchant_name_encoded)
+            merchant_name = urllib.parse.unquote(merchant_name_encoded)
+
         if not encResp:
             frappe.local.response["type"] = "redirect"
             frappe.local.response["location"] = get_url("payment-failed")
             return
 
-        # Get CCAvenue settings
+        # 2. Decrypt response
         settings = frappe.get_doc("CCAvenue Settings")
-
-        # Decrypt the response
         if merchant_name:
-            merchat_doc = frappe.get_doc("CCAvenue Merchant", merchant_name)
-            decrypted_data = decrypt(encResp, merchat_doc.get_password(fieldname="encryption_key", raise_exception=False))
+            merchant_doc = frappe.get_doc("CCAvenue Merchant", merchant_name)
+            decrypted_data = decrypt(encResp, merchant_doc.get_password(fieldname="encryption_key", raise_exception=False))
         else:
             decrypted_data = decrypt(encResp, settings.get_password(fieldname="encryption_key", raise_exception=False))
 
-        # Parse the decrypted data (URL encoded key-value pairs)
+        # 3. Parse decrypted response
         response_data = {}
         for param in decrypted_data.split('&'):
             if param and '=' in param:
                 key, value = param.split('=', 1)
                 response_data[key] = value
 
-        # Extract merchant_param1 and parse the JSON
         merchant_param_str = response_data.get("merchant_param1", "")
         merchant_data = {}
 
         try:
-            # Properly parse the JSON data
             if merchant_param_str:
                 parts = merchant_param_str.split(", ")
                 for part in parts:
@@ -333,45 +330,61 @@ def verify_transaction():
                     elif " " in part:
                         k, v = part.split(" ", 1)
                         merchant_data[k.strip()] = v.strip()
-            # CRITICAL: Set the session user from merchant_data if available
+
+            # Restore user session
             user = merchant_data.get("user")
             if user and user != "Guest" and frappe.session.user == "Guest":
                 frappe.set_user(user)
-
-                # Create a new session for the user
                 frappe.local.login_manager.login_as(user)
-
-                # Log that we've restored the user
                 frappe.logger().info(f"CCAvenue: Restored user session for {user}")
-
         except Exception as e:
             frappe.log_error(f"Error parsing merchant data: {str(e)}")
             frappe.local.response["type"] = "redirect"
             frappe.local.response["location"] = get_url("payment-failed")
             return
 
-        # For security, log the current user
         frappe.logger().info(f"CCAvenue callback - Current user: {frappe.session.user}")
 
-        # Get the integration request
+        # 4. Check integration request
         order_id = merchant_data.get("token")
-        integration_request = None
+        if not order_id:
+            frappe.local.response["type"] = "redirect"
+            frappe.local.response["location"] = get_url("payment-failed")
+            return
 
-        if order_id:
+        try:
             integration_request = frappe.get_doc("Integration Request", order_id.split('@')[1])
-
-        if not integration_request:
+        except frappe.DoesNotExistError:
             frappe.log_error(f"Integration request not found for token: {order_id}", "CCAvenue Payment Error")
             frappe.local.response["type"] = "redirect"
             frappe.local.response["location"] = get_url("payment-failed")
             return
 
-        # Update the data with the response from CCAvenue
+        # 5. Check if already paid
+        payment_request_name = merchant_data.get("reference_docname")
+        if payment_request_name:
+            try:
+                pr = frappe.get_doc("Payment Request", payment_request_name)
+                if pr.status == "Paid":
+                    frappe.logger().info(f"Payment Request {payment_request_name} already paid. Skipping controller logic.")
+                    redirect_url = f"payment-success?doctype=Payment Request&docname={payment_request_name}"
+                    frappe.local.response["type"] = "redirect"
+                    frappe.local.response["location"] = get_url(redirect_url)
+
+                    if user and user != "Guest":
+                        frappe.local.cookie_manager.set_cookie("system_user", user)
+                        frappe.local.cookie_manager.set_cookie("full_name", frappe.db.get_value("User", user, "full_name") or "")
+                        frappe.local.cookie_manager.set_cookie("user_id", user)
+                        frappe.local.cookie_manager.set_cookie("sid", frappe.session.sid)
+                        frappe.local.response["set_cookie"] = frappe.local.cookie_manager.cookies
+
+                    return
+            except frappe.DoesNotExistError:
+                frappe.logger().warning(f"Could not find Payment Request: {payment_request_name}")
+
+        # 6. Continue normal controller flow
         data = json.loads(integration_request.data)
-
-        # Save the user in the integration request data for future reference
         data["user"] = user or frappe.session.user
-
         data.update({
             "order_status": response_data.get("order_status"),
             "tracking_id": response_data.get("tracking_id"),
@@ -381,40 +394,26 @@ def verify_transaction():
             "ccavenue_response": response_data
         })
 
-        # Create a new controller instance
+        integration_request.data = json.dumps(data)
+        integration_request.save(ignore_permissions=True)
+
         controller = frappe.get_doc("CCAvenue Settings")
         controller.data = frappe._dict(data)
         controller.integration_request = integration_request
 
-        # Update the integration request with the updated data
-        integration_request.data = json.dumps(data)
-        
-        # Use ignore_permissions=True to bypass permission checks
-        integration_request.save(ignore_permissions=True)
-
-
-        # Set status based on order_status
         if response_data.get("order_status") == "Success":
             controller.flags.status_changed_to = "Completed"
 
-        # Call authorize_payment to complete the flow
         result = controller.authorize_payment()
-
-        # Preserve cookies in the redirect
         redirect_location = get_url(result["redirect_to"])
 
-        # Make sure to authenticate user via session cookie
         if user and user != "Guest":
-            # Set session cookies explicitly
             frappe.local.cookie_manager.set_cookie("system_user", user)
             frappe.local.cookie_manager.set_cookie("full_name", frappe.db.get_value("User", user, "full_name") or "")
             frappe.local.cookie_manager.set_cookie("user_id", user)
             frappe.local.cookie_manager.set_cookie("sid", frappe.session.sid)
 
-        # Set the cookies in response
         frappe.local.response["set_cookie"] = frappe.local.cookie_manager.cookies
-
-        # Set the redirect with cookie preservation
         frappe.local.response["type"] = "redirect"
         frappe.local.response["location"] = redirect_location
 
@@ -422,7 +421,6 @@ def verify_transaction():
         frappe.log_error(f"{str(e)}\n{frappe.get_traceback()}", "CCAvenue Payment Verification Error")
         frappe.local.response["type"] = "redirect"
         frappe.local.response["location"] = get_url("payment-failed")
-
 
 @frappe.whitelist(allow_guest=True)
 def get_api_key():

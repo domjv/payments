@@ -52,12 +52,14 @@ def _process_payment_update(data):
         return
 
     try:
-        pr = frappe.get_doc("Payment Request", {"name": order_id[:18]})
+        pr_name = order_id.split("@")[0] if "@" in order_id else order_id
+        pr = frappe.get_doc("Payment Request", {"name": pr_name})
     except frappe.DoesNotExistError:
         frappe.log_error(f"Payment Request not found for order_id: {order_id}", "CCAvenue Payment Error")
         return
 
     if pr.status == "Paid":
+        frappe.logger().info(f"Payment already marked Paid for {pr.name}") 
         return
 
     # Verify amount matches
@@ -69,8 +71,16 @@ def _process_payment_update(data):
         return
 
     if status in ["Success", "Shipped"]:
+        if frappe.db.exists("Payment Entry", {"reference_no": data.get("tracking_id")}):
+            frappe.log_error(f"Payment Entry already exists for {data.get('tracking_id')}", "CCAvenue Payment Error")
+            return
         _create_payment_entry(pr, data)
         pr.db_set("status", "Paid")
+        
+        ref_doc = frappe.get_doc(pr.reference_doctype, pr.reference_name)
+        ref_doc.db_set("status", "Paid")
+        ref_doc.add_comment("Comment", text=f"Payment updated via CCAvenue webhook with status {status}")
+        
         frappe.get_doc(pr.reference_doctype, pr.reference_name).db_set("status", "Paid")
     elif status in ["Failure", "Aborted", "Invalid"]:
         pr.db_set("status", "Cancelled")
@@ -117,3 +127,4 @@ def _create_payment_entry(pr, data):
     })
     pe.insert()
     pe.submit()
+    frappe.logger().info(f"Payment Entry created for {pr.name}")
