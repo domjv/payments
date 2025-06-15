@@ -432,8 +432,10 @@ def get_api_key():
 @frappe.whitelist()
 def get_working_key():
     """Get CCAvenue working key"""
-    settings = frappe.get_single("CCAvenue Settings")
-    return settings.get_password("encryption_key")
+    settings = frappe.get_doc("CCAvenue Settings")
+    working_key = settings.get_password(fieldname="encryption_key", raise_exception=False)
+    frappe.log_error(working_key, "CCAvenue Working Key")
+    return working_key
 
 @frappe.whitelist(allow_guest=True)
 def restore_user_session():
