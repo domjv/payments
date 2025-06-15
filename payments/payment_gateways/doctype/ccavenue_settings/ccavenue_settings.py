@@ -434,7 +434,6 @@ def get_working_key():
     """Get CCAvenue working key"""
     settings = frappe.get_doc("CCAvenue Settings")
     working_key = settings.get_password(fieldname="encryption_key", raise_exception=False)
-    frappe.log_error(working_key, "CCAvenue Working Key")
     return working_key
 
 @frappe.whitelist(allow_guest=True)

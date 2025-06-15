@@ -30,7 +30,6 @@ def _handle_ccavenue(source):
         if not working_key:
             frappe.log_error("Missing working key", f"CCAvenue {source}")
             return "Missing working key"
-        frappe.log_error(working_key, "CCAvenue Working Key")
         
         decrypted = decrypt(enc_resp, working_key)
         frappe.log_error(
