@@ -29,12 +29,18 @@ def _handle_ccavenue(source):
             return "Missing working key"
         
         decrypted = decrypt(enc_resp, working_key)
-        
         data = dict(item.split('=') for item in decrypted.split('&') if '=' in item)
+
+        # 👇 Switch to privileged user context
+        frappe.set_user("Administrator")
         _process_payment_update(data)
 
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), f"CCAvenue {source} Error")
+
+    finally:
+        # 👇 Always revert back
+        frappe.set_user("Guest")
 
 def _process_payment_update(data):
     order_id = data.get("order_id")
