@@ -1,5 +1,5 @@
 import frappe
-from payments.payment_gateways.doctype.ccavenue_settings.ccavenue_utils import decrypt
+from payments.utils.utils import decrypt
 from payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings import get_working_key
 
 @frappe.whitelist(allow_guest=True)
