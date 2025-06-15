@@ -33,7 +33,10 @@ def _handle_ccavenue(source):
         frappe.log_error(working_key, "CCAvenue Working Key")
         
         decrypted = decrypt(enc_resp, working_key)
-        frappe.log_error(decrypted, f"CCAvenue {source} Decrypted")
+        frappe.log_error(
+            title=f"CCAvenue {source} Decrypted",
+            message=decrypted[:5000]  # safely truncate if huge
+        )
 
         data = dict(item.split('=') for item in decrypted.split('&') if '=' in item)
         _process_payment_update(data)
