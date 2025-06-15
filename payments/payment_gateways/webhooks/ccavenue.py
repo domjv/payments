@@ -47,7 +47,6 @@ def _process_payment_update(data):
 
     try:
         pr = frappe.get_doc("Payment Request", {"name": order_id[:18]})
-        frappe.log_error(pr, "CCAvenue Payment Update Payment Request")
     except frappe.DoesNotExistError:
         frappe.log_error(f"Payment Request not found for order_id: {order_id}", "CCAvenue Payment Error")
         return
