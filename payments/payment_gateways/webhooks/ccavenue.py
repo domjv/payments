@@ -1,5 +1,5 @@
 import frappe
-from payments.utils.utils import decrypt
+from payments.payment_gateways.doctype.ccavenue_settings.ccavenue_utils import decrypt
 from payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings import get_working_key
 
 @frappe.whitelist(allow_guest=True)
@@ -18,6 +18,7 @@ def reconciliation_status():
 def _handle_ccavenue(source):
     try:
         enc_resp = frappe.local.form_dict.get("encResp")
+        frappe.log_error(enc_resp, "CCAvenue Order Status Encrypted Response")
         if not enc_resp:
             frappe.log_error("Missing encResp", f"CCAvenue {source}")
             return "Missing encResp"
@@ -26,7 +27,8 @@ def _handle_ccavenue(source):
         if not working_key:
             frappe.log_error("Missing working key", f"CCAvenue {source}")
             return "Missing working key"
-
+        frappe.log_error(working_key, "CCAvenue Working Key")
+        
         decrypted = decrypt(enc_resp, working_key)
         frappe.log_error(decrypted, f"CCAvenue {source} Decrypted")
 
