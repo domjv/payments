@@ -47,6 +47,10 @@ def _process_payment_update(data):
     order_id = data.get("order_id")
     status = data.get("order_status")
     amount = data.get("amount")
+    frappe.log_error(data, "CCAvenue Payment Update Data")
+    frappe.log_error(order_id, "CCAvenue Payment Update Order ID")
+    frappe.log_error(status, "CCAvenue Payment Update Status")
+    frappe.log_error(amount, "CCAvenue Payment Update Amount")
 
     if not order_id or not status:
         frappe.log_error(data, "Missing Order ID or Status")
