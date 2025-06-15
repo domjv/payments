@@ -18,7 +18,10 @@ def reconciliation_status():
 def _handle_ccavenue(source):
     try:
         enc_resp = frappe.local.form_dict.get("encResp")
-        frappe.log_error(enc_resp, "CCAvenue Order Status Encrypted Response")
+        frappe.log_error(
+            title="CCAvenue encResp (truncated)" if len(enc_resp) > 140 else "CCAvenue encResp",
+            message=enc_resp[:5000]  # avoid flooding the DB
+        )
         if not enc_resp:
             frappe.log_error("Missing encResp", f"CCAvenue {source}")
             return "Missing encResp"
