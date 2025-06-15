@@ -70,10 +70,24 @@ def _process_payment_update(data):
         pr.db_set("status", "Cancelled")
 
 def _create_payment_entry(pr, data):
-    # Get the bank account from CCAvenue Settings
-    bank_account = frappe.db.get_single_value("CCAvenue Settings", "bank_account")
+    company = pr.company
+
+    # Get default account for this company under CCAvenue Mode of Payment
+    bank_account = frappe.db.get_value(
+        "Mode of Payment Account",
+        filters={
+            "parent": "CCAvenue",
+            "parenttype": "Mode of Payment",
+            "company": company
+        },
+        fieldname="default_account"
+    )
+
     if not bank_account:
-        frappe.log_error("Bank account not configured in CCAvenue Settings", "CCAvenue Payment Error")
+        frappe.log_error(
+            f"No default account configured for company {company} under Mode of Payment 'CCAvenue'",
+            "CCAvenue Payment Error"
+        )
         return
 
     pe = frappe.get_doc({
