@@ -33,7 +33,7 @@ def _handle_ccavenue(source):
 
         # 👇 Switch to privileged user context
         frappe.set_user("Administrator")
-        _process_payment_update(data)
+        _process_payment_update(data, source)
 
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), f"CCAvenue {source} Error")
@@ -42,7 +42,7 @@ def _handle_ccavenue(source):
         # 👇 Always revert back
         frappe.set_user("Guest")
 
-def _process_payment_update(data):
+def _process_payment_update(data, source):
     order_id = data.get("order_id")
     status = data.get("order_status")
     amount = data.get("amount")
@@ -55,7 +55,7 @@ def _process_payment_update(data):
         pr_name = order_id.split("@")[0] if "@" in order_id else order_id
         pr = frappe.get_doc("Payment Request", {"name": pr_name})
     except frappe.DoesNotExistError:
-        frappe.log_error(f"Payment Request not found for order_id: {order_id}", "CCAvenue Payment Error")
+        frappe.log_error(f"Payment Request not found for order_id: {order_id}", f"CCAvenue {source} Webhook Payment Error")
         return
 
     if pr.status == "Paid":
@@ -66,26 +66,26 @@ def _process_payment_update(data):
     if amount and float(amount) != float(pr.grand_total):
         frappe.log_error(
             f"Amount mismatch - CCAvenue: {amount}, Payment Request: {pr.grand_total}",
-            "CCAvenue Payment Error"
+            f"CCAvenue {source} Webhook Payment Error"
         )
         return
 
     if status in ["Success", "Shipped"]:
         if frappe.db.exists("Payment Entry", {"reference_no": data.get("tracking_id")}):
-            frappe.log_error(f"Payment Entry already exists for {data.get('tracking_id')}", "CCAvenue Payment Error")
+            frappe.log_error(f"Payment Entry already exists for {data.get('tracking_id')}", f"CCAvenue {source} Webhook Payment Error")
             return
-        _create_payment_entry(pr, data)
+        _create_payment_entry(pr, data, source)
         pr.db_set("status", "Paid")
+        pr.add_comment("Comment", text=f"Payment updated via CCAvenue {source} webhook with status {status}. Tracking ID: {data.get('tracking_id')}")
         
         ref_doc = frappe.get_doc(pr.reference_doctype, pr.reference_name)
         ref_doc.db_set("status", "Paid")
-        ref_doc.add_comment("Comment", text=f"Payment updated via CCAvenue webhook with status {status}")
-        
-        frappe.get_doc(pr.reference_doctype, pr.reference_name).db_set("status", "Paid")
+        ref_doc.add_comment("Comment", text=f"Payment updated via CCAvenue {source} webhook with status {status}. Tracking ID: {data.get('tracking_id')}")
     elif status in ["Failure", "Aborted", "Invalid"]:
         pr.db_set("status", "Cancelled")
+        pr.add_comment("Comment", text=f"Payment cancelled via CCAvenue {source} webhook with status {status}. Tracking ID: {data.get('tracking_id')}")
 
-def _create_payment_entry(pr, data):
+def _create_payment_entry(pr, data, source):
     company = pr.company
 
     # Get default account for this company under CCAvenue Mode of Payment
@@ -102,7 +102,7 @@ def _create_payment_entry(pr, data):
     if not bank_account:
         frappe.log_error(
             f"No default account configured for company {company} under Mode of Payment 'CCAvenue'",
-            "CCAvenue Payment Error"
+            f"CCAvenue {source} Webhook Payment Error"
         )
         return
 
@@ -127,4 +127,5 @@ def _create_payment_entry(pr, data):
     })
     pe.insert()
     pe.submit()
+    pe.add_comment("Comment", text=f"Payment Entry created via CCAvenue {source} webhook. Tracking ID: {data.get('tracking_id')}")
     frappe.logger().info(f"Payment Entry created for {pr.name}")
