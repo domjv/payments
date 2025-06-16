@@ -62,13 +62,14 @@ def _process_payment_update(data, source):
         frappe.logger().info(f"Payment already marked Paid for {pr.name}") 
         return
 
-    # Verify amount matches
-    if amount and float(amount) != float(pr.grand_total):
-        frappe.log_error(
-            f"Amount mismatch - CCAvenue: {amount}, Payment Request: {pr.grand_total}",
-            f"CCAvenue {source} Webhook Payment Error"
-        )
-        return
+    # TODO: Uncomment this when we have a way to handle amount mismatch
+    # # Verify amount matches
+    # if amount and float(amount) != float(pr.grand_total):
+    #     frappe.log_error(
+    #         f"Amount mismatch - CCAvenue: {amount}, Payment Request: {pr.grand_total}",
+    #         f"CCAvenue {source} Webhook Payment Error"
+    #     )
+    #     return
 
     if status in ["Success", "Shipped"]:
         if frappe.db.exists("Payment Entry", {"reference_no": data.get("tracking_id")}):
