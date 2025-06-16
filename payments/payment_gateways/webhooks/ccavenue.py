@@ -88,25 +88,25 @@ def _process_payment_update(data, source):
 
 def _create_payment_entry(pr, data, source):
     company = pr.company
-    # if source == "Reconciliation":
-    frappe.sendmail(
-        recipients=["dominic.v@pleasantbiz.com"],
-        subject=f"CCAvenue Reconciliation Webhook Payment Update - {pr.name}",
-        message=f"""
-            Payment Request {pr.name} has been updated via CCAvenue Reconciliation.
-            <br><br>
-            Details:
-            <br>
-            - Order ID: {data.get('order_id')}
-            <br>
-            - Status: {data.get('order_status')}
-            <br>
-            - Amount: {data.get('amount')}
-            <br>
-            - Tracking ID: {data.get('tracking_id')}
-        """,
-        now=True
-    )
+    if source == "Reconciliation":
+        frappe.sendmail(
+            recipients=["dominic.v@pleasantbiz.com"],
+            subject=f"CCAvenue Reconciliation Webhook Payment Update - {pr.name}",
+            message=f"""
+                Payment Request {pr.name} has been updated via CCAvenue Reconciliation.
+                <br><br>
+                Details:
+                <br>
+                - Order ID: {data.get('order_id')}
+                <br>
+                - Status: {data.get('order_status')}
+                <br>
+                - Amount: {data.get('amount')}
+                <br>
+                - Tracking ID: {data.get('tracking_id')}
+            """,
+            now=True
+        )
 
     # Get default account for this company under CCAvenue Mode of Payment
     bank_account = frappe.db.get_value(
