@@ -165,6 +165,14 @@ def _process_payment_update(data, source):
         ref_doc = frappe.get_doc(pr.reference_doctype, pr.reference_name)
         ref_doc.db_set("status", "Paid")
         ref_doc.add_comment("Comment", text=f"Payment updated via CCAvenue {source} webhook with status {status}. Tracking ID: {data.get('tracking_id')}")
-    elif status in ["Failure", "Aborted", "Invalid"]:
-        pr.db_set("status", "Cancelled")
-        pr.add_comment("Comment", text=f"Payment cancelled via CCAvenue {source} webhook with status {status}. Tracking ID: {data.get('tracking_id')}")
+    elif status in ["Failure", "Aborted", "Invalid", "Unsuccessful"]:
+        # Use proper cancellation method instead of just db_set
+        try:
+            if pr.docstatus == 1:
+                pr.cancel()
+                pr.add_comment("Comment", text=f"Payment cancelled via CCAvenue {source} webhook with status {status}. Tracking ID: {data.get('tracking_id')}")
+        except Exception as e:
+            frappe.log_error(f"Failed to cancel Payment Request {pr.name}: {str(e)}", f"CCAvenue {source} Cancellation Error")
+            # Fallback to status update if cancel method fails
+            pr.db_set("status", "Cancelled")
+            pr.add_comment("Comment", text=f"Payment status updated to Cancelled via CCAvenue {source} webhook(using db_set) with status {status}. Tracking ID: {data.get('tracking_id')}")
