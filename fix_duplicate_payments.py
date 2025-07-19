@@ -8,7 +8,7 @@ Usage:
 """
 
 import frappe
-from payments.utils.ivyliving_methods import cleanup_duplicate_payment_entries, ensure_payment_entry_unique_constraint
+from payments.utils.ivyliving_methods import cleanup_duplicate_payment_entries
 
 def main():
     """Main function to fix duplicate Payment Entries"""
@@ -18,10 +18,7 @@ def main():
         # Clean up existing duplicates
         cleanup_duplicate_payment_entries()
         
-        # Add unique constraint
-        ensure_payment_entry_unique_constraint()
-        
-        print("✅ Successfully fixed duplicate Payment Entries and added unique constraint")
+        print("✅ Successfully cleaned up duplicate Payment Entries")
         
     except Exception as e:
         print(f"❌ Failed to fix duplicate Payment Entries: {str(e)}")

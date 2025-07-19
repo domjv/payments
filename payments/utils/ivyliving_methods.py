@@ -495,7 +495,7 @@ def cleanup_duplicate_payment_entries():
 @frappe.whitelist()
 def fix_duplicate_payment_entries():
     """
-    Manual function to fix duplicate Payment Entries and add unique constraint.
+    Manual function to fix duplicate Payment Entries.
     This can be called from the desk or via API.
     """
     try:
@@ -504,11 +504,8 @@ def fix_duplicate_payment_entries():
         # Clean up existing duplicates
         cleanup_duplicate_payment_entries()
         
-        # Add unique constraint
-        ensure_payment_entry_unique_constraint()
-        
-        frappe.logger().info("Successfully fixed duplicate Payment Entries and added unique constraint")
-        return {"success": True, "message": "Duplicate Payment Entries fixed and unique constraint added"}
+        frappe.logger().info("Successfully cleaned up duplicate Payment Entries")
+        return {"success": True, "message": "Duplicate Payment Entries cleaned up"}
         
     except Exception as e:
         frappe.log_error(f"Failed to fix duplicate Payment Entries: {str(e)}", "Payment Entry Fix Error")
