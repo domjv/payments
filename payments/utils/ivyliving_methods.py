@@ -318,7 +318,8 @@ def process_ccavenue_payment_safely(order_id, tracking_id, status, source="Unkno
     
     try:
         # Use database-level check to prevent race conditions
-        with frappe.db.transaction():
+        frappe.db.begin()
+        try:
             # Double-check if Payment Entry already exists for this tracking_id (atomic operation)
             existing_payment = frappe.db.get_value("Payment Entry", {"reference_no": tracking_id}, "name")
             if existing_payment:
@@ -402,7 +403,12 @@ def process_ccavenue_payment_safely(order_id, tracking_id, status, source="Unkno
             ref_doc.add_comment("Comment", text=f"Payment updated via CCAvenue {source}. Tracking ID: {tracking_id}")
             
             frappe.logger().info(f"Payment Entry created for {pr.name} via {source}. Tracking ID: {tracking_id}")
+            frappe.db.commit()
             return True
+            
+        except Exception as e:
+            frappe.db.rollback()
+            raise e
             
     except Exception as e:
         frappe.log_error(f"Failed to process payment for {pr_name} via {source}: {str(e)}", f"CCAvenue {source} Payment Error")
