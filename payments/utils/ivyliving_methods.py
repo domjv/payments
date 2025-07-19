@@ -297,3 +297,219 @@ def handle_cart_submit():
         frappe.log_error("Razorpay Order Creation Error", str(e))
         frappe.response['success'] = False
         frappe.response['message'] = f"An error occurred while creating the payment order: {str(e)}"
+
+def process_ccavenue_payment_safely(order_id, tracking_id, status, source="Unknown"):
+    """
+    Centralized function to process CCAvenue payments safely without duplicates.
+    This function should be called from both normal flow and webhook flow.
+    
+    Args:
+        order_id: The order ID from CCAvenue
+        tracking_id: The tracking ID from CCAvenue
+        status: Payment status (Success, Shipped, etc.)
+        source: Source of the payment (Normal Flow, Echo, Reconciliation, etc.)
+    """
+    if not order_id or not tracking_id:
+        frappe.logger().warning(f"Missing order_id or tracking_id for {source}")
+        return False
+        
+    # Extract Payment Request name from order_id
+    pr_name = order_id.split("@")[0] if "@" in order_id else order_id
+    
+    try:
+        # Use database-level check to prevent race conditions
+        with frappe.db.transaction():
+            # Double-check if Payment Entry already exists for this tracking_id (atomic operation)
+            existing_payment = frappe.db.get_value("Payment Entry", {"reference_no": tracking_id}, "name")
+            if existing_payment:
+                frappe.logger().info(f"Payment Entry already exists for tracking_id: {tracking_id} (found: {existing_payment})")
+                
+                # Still update Payment Request status if not already paid
+                try:
+                    pr = frappe.get_doc("Payment Request", pr_name)
+                    if pr.status != "Paid":
+                        pr.db_set("status", "Paid")
+                        pr.add_comment("Comment", text=f"Payment status updated via CCAvenue {source}. Tracking ID: {tracking_id} (Payment Entry: {existing_payment})")
+                        
+                        # Update reference document status
+                        ref_doc = frappe.get_doc(pr.reference_doctype, pr.reference_name)
+                        ref_doc.db_set("status", "Paid")
+                        ref_doc.add_comment("Comment", text=f"Payment status updated via CCAvenue {source}. Tracking ID: {tracking_id} (Payment Entry: {existing_payment})")
+                except Exception as e:
+                    frappe.log_error(f"Failed to update Payment Request status for existing payment: {str(e)}", f"CCAvenue {source} Status Update Error")
+                
+                return True
+            
+            # Check if Payment Request is already paid
+            try:
+                pr = frappe.get_doc("Payment Request", pr_name)
+                if pr.status == "Paid":
+                    frappe.logger().info(f"Payment Request {pr.name} already marked as Paid")
+                    return True
+            except frappe.DoesNotExistError:
+                frappe.log_error(f"Payment Request not found for order_id: {order_id}", f"CCAvenue {source} Payment Error")
+                return False
+            
+            # Only proceed if status indicates success
+            if status not in ["Success", "Shipped"]:
+                frappe.logger().info(f"Payment status '{status}' is not successful for {pr.name}")
+                return False
+            
+            # Update Integration Request data with tracking_id
+            try:
+                integration_request_name = order_id.split("@")[1] if "@" in order_id else None
+                if integration_request_name:
+                    integration_request = frappe.get_doc("Integration Request", integration_request_name)
+                    existing_data = json.loads(integration_request.data) if integration_request.data else {}
+                    existing_data.update({
+                        "tracking_id": tracking_id,
+                        "order_status": status,
+                        "webhook_source": source
+                    })
+                    integration_request.data = json.dumps(existing_data)
+                    integration_request.save(ignore_permissions=True)
+            except Exception as e:
+                frappe.log_error(f"Failed to update Integration Request with tracking_id: {str(e)}", f"CCAvenue {source} Error")
+            
+            # Create Payment Entry using existing utility function with additional safety
+            try:
+                handle_payment_authorization_payment_request(pr, "on_payment_authorized", "Completed")
+            except Exception as e:
+                # Check if this is a duplicate key error
+                if "Duplicate entry" in str(e) or "UNIQUE constraint failed" in str(e):
+                    frappe.logger().info(f"Payment Entry already exists (caught by database constraint) for tracking_id: {tracking_id}")
+                    # Still update Payment Request status if not already paid
+                    if pr.status != "Paid":
+                        pr.db_set("status", "Paid")
+                        pr.add_comment("Comment", text=f"Payment status updated via CCAvenue {source}. Tracking ID: {tracking_id} (caught duplicate)")
+                        
+                        # Update reference document status
+                        ref_doc = frappe.get_doc(pr.reference_doctype, pr.reference_name)
+                        ref_doc.db_set("status", "Paid")
+                        ref_doc.add_comment("Comment", text=f"Payment status updated via CCAvenue {source}. Tracking ID: {tracking_id} (caught duplicate)")
+                    return True
+                else:
+                    # Re-raise if it's not a duplicate error
+                    raise
+            
+            # Update Payment Request status
+            pr.db_set("status", "Paid")
+            pr.add_comment("Comment", text=f"Payment updated via CCAvenue {source}. Tracking ID: {tracking_id}")
+            
+            # Update reference document status
+            ref_doc = frappe.get_doc(pr.reference_doctype, pr.reference_name)
+            ref_doc.db_set("status", "Paid")
+            ref_doc.add_comment("Comment", text=f"Payment updated via CCAvenue {source}. Tracking ID: {tracking_id}")
+            
+            frappe.logger().info(f"Payment Entry created for {pr.name} via {source}. Tracking ID: {tracking_id}")
+            return True
+            
+    except Exception as e:
+        frappe.log_error(f"Failed to process payment for {pr_name} via {source}: {str(e)}", f"CCAvenue {source} Payment Error")
+        return False
+
+def ensure_payment_entry_unique_constraint():
+    """
+    Ensure that Payment Entry reference_no field has a unique constraint to prevent duplicates.
+    This should be called during app installation or migration.
+    Unfortunatly, this  cannot be used as there are chances that multiple invoices are paid for the same tracking_id when paid manually.
+    So, we need to clean up the duplicate payment entries manually, only for CCAvenue payments.
+    This function is not used in the code, but is kept here for reference.
+    """
+    try:
+        # Check if unique constraint already exists
+        constraints = frappe.db.sql("""
+            SELECT CONSTRAINT_NAME 
+            FROM information_schema.TABLE_CONSTRAINTS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'tabPayment Entry' 
+            AND CONSTRAINT_TYPE = 'UNIQUE'
+            AND CONSTRAINT_NAME LIKE '%reference_no%'
+        """, as_dict=True)
+        
+        if not constraints:
+            # Add unique constraint on reference_no field
+            frappe.db.sql("""
+                ALTER TABLE `tabPayment Entry` 
+                ADD UNIQUE INDEX `unique_reference_no` (`reference_no`)
+            """)
+            frappe.logger().info("Added unique constraint on Payment Entry reference_no field")
+        else:
+            frappe.logger().info("Unique constraint on Payment Entry reference_no field already exists")
+            
+    except Exception as e:
+        frappe.log_error(f"Failed to add unique constraint on Payment Entry reference_no: {str(e)}", "Payment Entry Constraint Error")
+
+def cleanup_duplicate_payment_entries():
+    """
+    Clean up existing duplicate Payment Entries by keeping only the first one for each tracking_id.
+    Instead of deleting, set the status of the duplicate entries to 'Cancelled'.
+    This should be called before adding the unique constraint.
+    """
+    try:
+        # Find duplicate Payment Entries by reference_no
+        duplicates = frappe.db.sql("""
+            SELECT reference_no, COUNT(*) as count, GROUP_CONCAT(name ORDER BY creation) as payment_entries
+            FROM `tabPayment Entry` 
+            WHERE reference_no IS NOT NULL AND reference_no != '' AND mode_of_payment = 'CCAvenue' AND status = 'Submitted'
+            GROUP BY reference_no 
+            HAVING COUNT(*) > 1
+        """, as_dict=True)
+        
+        if not duplicates:
+            frappe.logger().info("No duplicate Payment Entries found")
+            return
+            
+        frappe.logger().info(f"Found {len(duplicates)} duplicate Payment Entry groups to clean up")
+        
+        for duplicate in duplicates:
+            reference_no = duplicate.reference_no
+            payment_entries = duplicate.payment_entries.split(',')
+            
+            # Keep the first one (oldest by creation), cancel the rest
+            to_keep = payment_entries[0]
+            to_cancel = payment_entries[1:]
+            
+            frappe.logger().info(f"Cleaning up duplicates for reference_no {reference_no}: keeping {to_keep}, cancelling {to_cancel}")
+            
+            for payment_entry_name in to_cancel:
+                try:
+                    # Check if the Payment Entry is submitted
+                    docstatus = frappe.db.get_value("Payment Entry", payment_entry_name, "docstatus")
+                    if docstatus == 1:
+                        # Cancel the Payment Entry (do not delete)
+                        pe = frappe.get_doc("Payment Entry", payment_entry_name)
+                        pe.cancel()
+                        frappe.logger().info(f"Cancelled Payment Entry: {payment_entry_name}")
+                    else:
+                        # If not submitted, just set status to 'Cancelled'
+                        frappe.db.set_value("Payment Entry", payment_entry_name, "status", "Cancelled")
+                        frappe.db.set_value("Payment Entry", payment_entry_name, "docstatus", 2)
+                        frappe.logger().info(f"Set Payment Entry to Cancelled: {payment_entry_name}")
+                except Exception as e:
+                    frappe.log_error(f"Failed to cancel Payment Entry {payment_entry_name}: {str(e)}", "Payment Entry Cleanup Error")
+                    
+    except Exception as e:
+        frappe.log_error(f"Failed to cleanup duplicate Payment Entries: {str(e)}", "Payment Entry Cleanup Error")
+
+@frappe.whitelist()
+def fix_duplicate_payment_entries():
+    """
+    Manual function to fix duplicate Payment Entries and add unique constraint.
+    This can be called from the desk or via API.
+    """
+    try:
+        frappe.logger().info("Starting duplicate Payment Entry cleanup...")
+        
+        # Clean up existing duplicates
+        cleanup_duplicate_payment_entries()
+        
+        # Add unique constraint
+        ensure_payment_entry_unique_constraint()
+        
+        frappe.logger().info("Successfully fixed duplicate Payment Entries and added unique constraint")
+        return {"success": True, "message": "Duplicate Payment Entries fixed and unique constraint added"}
+        
+    except Exception as e:
+        frappe.log_error(f"Failed to fix duplicate Payment Entries: {str(e)}", "Payment Entry Fix Error")
+        return {"success": False, "message": f"Failed to fix duplicate Payment Entries: {str(e)}"}

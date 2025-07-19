@@ -1,0 +1,2 @@
+# Add unique constraint to Payment Entry reference_no field to prevent duplicates
+payments.patches.v1_0_0.add_payment_entry_unique_constraint

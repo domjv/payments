@@ -167,64 +167,23 @@ class CCAvenueSettings(Document):
         return {"redirect_to": redirect_url, "status": status}
 
     def _create_payment_entry_if_needed(self, data):
-        """Create Payment Entry using existing utility function"""
+        """Create Payment Entry using centralized safe function"""
         try:
             order_id = data.get("order_id")
             tracking_id = data.get("tracking_id")
+            status = data.get("order_status")
             
-            if not order_id or not tracking_id:
-                return
+            # Use centralized function to prevent duplicates
+            from payments.utils.ivyliving_methods import process_ccavenue_payment_safely
+            success = process_ccavenue_payment_safely(order_id, tracking_id, status, "Normal Flow")
+            
+            if success:
+                frappe.logger().info(f"Payment processed successfully via normal flow for order_id: {order_id}")
+            else:
+                frappe.logger().warning(f"Payment processing failed via normal flow for order_id: {order_id}")
                 
-            # Check if Payment Entry already exists
-            if frappe.db.exists("Payment Entry", {"reference_no": tracking_id}):
-                frappe.logger().info(f"Payment Entry already exists for tracking_id: {tracking_id}")
-                return
-                
-            # Extract Payment Request name from order_id
-            pr_name = order_id.split("@")[0] if "@" in order_id else order_id
-            
-            try:
-                pr = frappe.get_doc("Payment Request", {"name": pr_name})
-            except frappe.DoesNotExistError:
-                frappe.log_error(f"Payment Request not found for order_id: {order_id}", "CCAvenue Normal Flow Payment Error")
-                return
-                
-            if pr.status == "Paid":
-                frappe.logger().info(f"Payment Request {pr.name} already marked as Paid")
-                return
-                
-            # 👇 Ensure Integration Request data is updated with tracking_id before calling utility
-            try:
-                integration_request_name = order_id.split("@")[1] if "@" in order_id else None
-                if integration_request_name:
-                    integration_request = frappe.get_doc("Integration Request", integration_request_name)
-                    existing_data = json.loads(integration_request.data) if integration_request.data else {}
-                    existing_data.update({
-                        "tracking_id": tracking_id,
-                        "order_status": data.get("order_status"),
-                        "webhook_source": "Normal Flow"
-                    })
-                    integration_request.data = json.dumps(existing_data)
-                    integration_request.save(ignore_permissions=True)
-            except Exception as e:
-                frappe.log_error(f"Failed to update Integration Request with tracking_id: {str(e)}", "CCAvenue Normal Flow Payment Error")
-                
-            # 👇 Use existing utility function to create Payment Entry
-            handle_payment_authorization_payment_request(pr, "on_payment_authorized", "Completed")
-            
-            # Update Payment Request status
-            pr.db_set("status", "Paid")
-            pr.add_comment("Comment", text=f"Payment updated via CCAvenue normal flow. Tracking ID: {tracking_id}")
-            
-            # Update reference document status
-            ref_doc = frappe.get_doc(pr.reference_doctype, pr.reference_name)
-            ref_doc.db_set("status", "Paid")
-            ref_doc.add_comment("Comment", text=f"Payment updated via CCAvenue normal flow. Tracking ID: {tracking_id}")
-            
-            frappe.logger().info(f"Payment Entry created for {pr.name} via normal flow using utility function")
-            
         except Exception as e:
-            frappe.log_error(f"Failed to create Payment Entry in normal flow: {str(e)}", "CCAvenue Normal Flow Payment Error")
+            frappe.log_error(f"Failed to process payment in normal flow: {str(e)}", "CCAvenue Normal Flow Payment Error")
 
     def create_encrypted_request_data(self, integration_request_name, **kwargs):
         """Create encrypted data for CCAvenue request"""

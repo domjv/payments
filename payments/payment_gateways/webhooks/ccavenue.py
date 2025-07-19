@@ -86,44 +86,18 @@ def _process_payment_update(data, source):
     except Exception as e:
         frappe.log_error(f"Failed to update Integration Request: {str(e)}", f"CCAvenue {source} Webhook Error")
 
-    try:
-        pr_name = order_id.split("@")[0] if "@" in order_id else order_id
-        pr = frappe.get_doc("Payment Request", {"name": pr_name})
-    except frappe.DoesNotExistError:
-        frappe.log_error(f"Payment Request not found for order_id: {order_id}", f"CCAvenue {source} Webhook Payment Error")
-        return
-
-    if pr.status == "Paid":
-        frappe.logger().info(f"Payment already marked Paid for {pr.name}") 
-        return
-
-    # 👇 Check if Payment Entry already exists for this tracking ID
-    if frappe.db.exists("Payment Entry", {"reference_no": data.get("tracking_id")}):
-        frappe.logger().info(f"Payment Entry already exists for tracking_id: {data.get('tracking_id')}")
-        # Still update Payment Request status if not already paid
-        if pr.status != "Paid":
-            pr.db_set("status", "Paid")
-            pr.add_comment("Comment", text=f"Payment status updated via CCAvenue {source} webhook. Tracking ID: {data.get('tracking_id')}")
-        return
-
-    # TODO: Uncomment this when we have a way to handle amount mismatch
-    # # Verify amount matches
-    # if amount and float(amount) != float(pr.grand_total):
-    #     frappe.log_error(
-    #         f"Amount mismatch - CCAvenue: {amount}, Payment Request: {pr.grand_total}",
-    #         f"CCAvenue {source} Webhook Payment Error"
-    #     )
-    #     return
-
+    # Use centralized function to prevent duplicates
+    from payments.utils.ivyliving_methods import process_ccavenue_payment_safely
+    
     if status in ["Success", "Shipped"]:
         # 👇 Send email notification for reconciliation webhooks
         if source == "Reconciliation":
             try:
                 frappe.sendmail(
                     recipients=["dominic.v@pleasantbiz.com"],
-                    subject=f"CCAvenue Reconciliation Webhook Payment Update - {pr.name}",
+                    subject=f"CCAvenue Reconciliation Webhook Payment Update - {order_id}",
                     message=f"""
-                        Payment Request {pr.name} has been updated via CCAvenue Reconciliation.
+                        Payment Request has been updated via CCAvenue Reconciliation.
                         <br><br>
                         Details:
                         <br>
@@ -140,39 +114,26 @@ def _process_payment_update(data, source):
             except Exception as e:
                 frappe.log_error(f"Failed to send reconciliation email: {str(e)}", f"CCAvenue {source} Email Error")
         
-        # 👇 Update Integration Request data with tracking_id before calling utility function
-        try:
-            integration_request_name = order_id.split("@")[1] if "@" in order_id else None
-            if integration_request_name:
-                integration_request = frappe.get_doc("Integration Request", integration_request_name)
-                existing_data = json.loads(integration_request.data) if integration_request.data else {}
-                existing_data.update({
-                    "tracking_id": data.get("tracking_id"),
-                    "order_status": status,
-                    "webhook_source": source
-                })
-                integration_request.data = json.dumps(existing_data)
-                integration_request.save(ignore_permissions=True)
-        except Exception as e:
-            frappe.log_error(f"Failed to update Integration Request with tracking_id: {str(e)}", f"CCAvenue {source} Webhook Error")
+        # Process payment using centralized function
+        success = process_ccavenue_payment_safely(order_id, data.get("tracking_id"), status, source)
         
-        # 👇 Use existing utility function to create Payment Entry
-        handle_payment_authorization_payment_request(pr, "on_payment_authorized", "Completed")
-        
-        pr.db_set("status", "Paid")
-        pr.add_comment("Comment", text=f"Payment updated via CCAvenue {source} webhook with status {status}. Tracking ID: {data.get('tracking_id')}")
-        
-        ref_doc = frappe.get_doc(pr.reference_doctype, pr.reference_name)
-        ref_doc.db_set("status", "Paid")
-        ref_doc.add_comment("Comment", text=f"Payment updated via CCAvenue {source} webhook with status {status}. Tracking ID: {data.get('tracking_id')}")
+        if success:
+            frappe.logger().info(f"Payment processed successfully via {source} webhook for order_id: {order_id}")
+        else:
+            frappe.logger().warning(f"Payment processing failed via {source} webhook for order_id: {order_id}")
+            
     elif status in ["Failure", "Aborted", "Invalid", "Unsuccessful"]:
-        # Use proper cancellation method instead of just db_set
+        # Handle failed payments
         try:
+            pr_name = order_id.split("@")[0] if "@" in order_id else order_id
+            pr = frappe.get_doc("Payment Request", {"name": pr_name})
+            
+            # Use proper cancellation method instead of just db_set
             if pr.docstatus == 1:
                 pr.cancel()
                 pr.add_comment("Comment", text=f"Payment cancelled via CCAvenue {source} webhook with status {status}. Tracking ID: {data.get('tracking_id')}")
+            else:
+                pr.db_set("status", "Cancelled")
+                pr.add_comment("Comment", text=f"Payment status updated to Cancelled via CCAvenue {source} webhook with status {status}. Tracking ID: {data.get('tracking_id')}")
         except Exception as e:
-            frappe.log_error(f"Failed to cancel Payment Request {pr.name}: {str(e)}", f"CCAvenue {source} Cancellation Error")
-            # Fallback to status update if cancel method fails
-            pr.db_set("status", "Cancelled")
-            pr.add_comment("Comment", text=f"Payment status updated to Cancelled via CCAvenue {source} webhook(using db_set) with status {status}. Tracking ID: {data.get('tracking_id')}")
+            frappe.log_error(f"Failed to handle failed payment for {order_id}: {str(e)}", f"CCAvenue {source} Cancellation Error")
