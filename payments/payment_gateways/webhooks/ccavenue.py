@@ -90,37 +90,37 @@ def _process_payment_update(data, source):
     from payments.utils.ivyliving_methods import process_ccavenue_payment_safely
     
     if status in ["Success", "Shipped"]:
-        # 👇 Send email notification for reconciliation webhooks
-        if source == "Reconciliation":
-            try:
-                frappe.sendmail(
-                    recipients=["dominic.v@pleasantbiz.com"],
-                    subject=f"CCAvenue Reconciliation Webhook Payment Update - {order_id}",
-                    message=f"""
-                        Payment Request has been updated via CCAvenue Reconciliation.
-                        <br><br>
-                        Details:
-                        <br>
-                        - Order ID: {data.get('order_id')}
-                        <br>
-                        - Status: {data.get('order_status')}
-                        <br>
-                        - Amount: {data.get('amount')}
-                        <br>
-                        - Tracking ID: {data.get('tracking_id')}
-                    """,
-                    now=True
-                )
-            except Exception as e:
-                frappe.log_error(f"Failed to send reconciliation email: {str(e)}", f"CCAvenue {source} Email Error")
-        
         # Process payment using centralized function
         success = process_ccavenue_payment_safely(order_id, data.get("tracking_id"), status, source)
         
         if success:
             frappe.logger().info(f"Payment processed successfully via {source} webhook for order_id: {order_id}")
+            # 👇 Send email notification for reconciliation webhooks
+            if source == "Reconciliation":
+                try:
+                    frappe.sendmail(
+                        recipients=["dominic.v@pleasantbiz.com"],
+                        subject=f"CCAvenue Reconciliation Webhook Payment Update - {order_id}",
+                        message=f"""
+                            Payment Request has been updated via CCAvenue Reconciliation.
+                            <br><br>
+                            Details:
+                            <br>
+                            - Order ID: {data.get('order_id')}
+                            <br>
+                            - Status: {data.get('order_status')}
+                            <br>
+                            - Amount: {data.get('amount')}
+                            <br>
+                            - Tracking ID: {data.get('tracking_id')}
+                        """,
+                        now=True
+                    )
+                except Exception as e:
+                    frappe.log_error(f"Failed to send reconciliation email: {str(e)}", f"CCAvenue {source} Email Error")
+                    
         else:
-            frappe.logger().warning(f"Payment processing failed via {source} webhook for order_id: {order_id}")
+            frappe.log_error(f"Payment processing failed via {source} webhook for order_id: {order_id}", f"CCAvenue {source} Webhook Error")
             
     elif status in ["Failure", "Aborted", "Invalid", "Unsuccessful"]:
         # Handle failed payments
