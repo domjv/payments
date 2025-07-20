@@ -57,6 +57,30 @@ def _process_payment_update(data, source):
         frappe.log_error(data, "Missing Order ID or Status")
         return
 
+    # 👇 Add date filtering for reconciliation webhooks to ignore very old transactions
+    if source == "Reconciliation":
+        # Get max days configuration from CCAvenue Settings
+        try:
+            ccavenue_settings = frappe.get_doc("CCAvenue Settings")
+            max_days = getattr(ccavenue_settings, 'reconciliation_max_days', 2)  # Default to 2 days
+        except:
+            max_days = 2  # Fallback default
+            
+        # Check if this is a very old transaction
+        try:
+            integration_request_name = order_id.split("@")[1] if "@" in order_id else None
+            if integration_request_name:
+                integration_request = frappe.get_doc("Integration Request", integration_request_name)
+                days_old = (frappe.utils.now_datetime() - integration_request.creation).days
+                
+                if days_old > max_days:
+                    frappe.logger().info(f"Skipping old reconciliation webhook for order_id: {order_id} (created {days_old} days ago, max allowed: {max_days} days)")
+                    return
+                    
+        except Exception as e:
+            frappe.log_error(f"Failed to check transaction age for {order_id}: {str(e)}", f"CCAvenue {source} Age Check Error")
+            # Continue processing if we can't determine the age
+
     # 👇 Update Integration Request (similar to normal flow)
     try:
         integration_request_name = order_id.split("@")[1] if "@" in order_id else None

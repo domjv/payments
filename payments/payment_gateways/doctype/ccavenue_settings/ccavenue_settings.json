@@ -67,6 +67,18 @@
         "fieldname": "header_img",
         "fieldtype": "Attach Image",
         "label": "Header Image"
+      },
+      {
+        "fieldname": "webhook_settings_section",
+        "fieldtype": "Section Break",
+        "label": "Webhook Settings"
+      },
+      {
+        "default": "2",
+        "fieldname": "reconciliation_max_days",
+        "fieldtype": "Int",
+        "label": "Reconciliation Max Days",
+        "description": "Maximum age (in days) of transactions to process via reconciliation webhooks. Transactions older than this will be ignored."
       }
     ],
     "issingle": 1,
