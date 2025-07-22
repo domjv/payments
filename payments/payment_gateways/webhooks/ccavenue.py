@@ -63,6 +63,11 @@ def _process_payment_update(data, source):
         try:
             ccavenue_settings = frappe.get_doc("CCAvenue Settings")
             max_days = getattr(ccavenue_settings, 'reconciliation_max_days', 2)  # Default to 2 days
+            # Ensure max_days is a valid integer
+            if max_days is None:
+                max_days = 2
+            else:
+                max_days = int(max_days)
         except:
             max_days = 2  # Fallback default
             
