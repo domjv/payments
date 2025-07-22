@@ -142,6 +142,16 @@ def _process_payment_update(data, source):
                             - Amount: {data.get('amount')}
                             <br>
                             - Tracking ID: {data.get('tracking_id')}
+                            <br>
+                            - Transaction Date: {data.get('trans_date')}
+                            <br>
+                            - Billing Email: {data.get('billing_email')}
+                            <br>
+                            - Billing Name: {data.get('billing_name')}
+                            <br>
+                            - Billing Address: {data.get('billing_address')}
+                            <br>
+                            - Billing City: {data.get('billing_city')}
                         """,
                         now=True
                     )
