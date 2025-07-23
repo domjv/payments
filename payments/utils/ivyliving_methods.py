@@ -338,14 +338,237 @@ def process_ccavenue_payment_safely(order_id, tracking_id, status, source="Unkno
             
             return True
         
-        # Check if Payment Request is already paid
+        # Check Payment Request status and handle different states
         try:
             pr = frappe.get_doc("Payment Request", pr_name)
+            
             if pr.status == "Paid":
                 frappe.logger().info(f"Payment Request {pr.name} already marked as Paid")
                 return True
+                
+            elif pr.status == "Cancelled":
+                # Handle cancelled Payment Request - this is the key scenario
+                frappe.logger().info(f"Payment Request {pr.name} is in Cancelled state. Checking for active Payment Request...")
+                
+                # Look for an active Payment Request for the same reference document
+                active_pr = frappe.db.get_value("Payment Request", {
+                    "reference_doctype": pr.reference_doctype,
+                    "reference_name": pr.reference_name,
+                    "status": ["in", ["Initiated", "Authorized", "Requested"]],
+                    "name": ["!=", pr.name]  # Exclude the cancelled one
+                }, "name")
+                
+                if active_pr:
+                    frappe.logger().info(f"Found active Payment Request {active_pr} for same reference. Processing payment for active PR instead.")
+                    # Process payment for the active Payment Request instead
+                    active_pr_doc = frappe.get_doc("Payment Request", active_pr)
+                    
+                    # Update the cancelled PR to show it was superseded
+                    pr.add_comment("Comment", text=f"Payment Request superseded by {active_pr}. Original CCAvenue payment processed for active PR. Tracking ID: {tracking_id}")
+                    
+                    # Send email notification about Payment Request supersession
+                    try:
+                        frappe.sendmail(
+                            recipients=["dominic.v@pleasantbiz.com"],
+                            subject=f"CCAvenue Payment Request Superseded - {pr_name} → {active_pr}",
+                            message=f"""
+                                <h3>Payment Request Superseded</h3>
+                                <p>A cancelled Payment Request has been superseded by an active one for the same reference document.</p>
+                                
+                                <h4>Payment Details:</h4>
+                                <ul>
+                                    <li><strong>Order ID:</strong> {order_id}</li>
+                                    <li><strong>Tracking ID:</strong> {tracking_id}</li>
+                                    <li><strong>Status:</strong> {status}</li>
+                                    <li><strong>Source:</strong> {source}</li>
+                                    <li><strong>Cancelled PR:</strong> {pr_name}</li>
+                                    <li><strong>Active PR:</strong> {active_pr}</li>
+                                    <li><strong>Reference Document:</strong> {pr.reference_doctype} - {pr.reference_name}</li>
+                                    <li><strong>Amount:</strong> {pr.grand_total} {pr.currency}</li>
+                                </ul>
+                                
+                                <h4>What Happened:</h4>
+                                <p>The original Payment Request was cancelled, but the customer created a new Payment Request 
+                                for the same reference document. CCAvenue has now confirmed that the original payment was successful. 
+                                The system is processing the payment through the active Payment Request instead of reactivating 
+                                the cancelled one.</p>
+                                
+                                <h4>Next Steps:</h4>
+                                <p>The system will now attempt to create a Payment Entry for the active Payment Request. 
+                                You will receive another notification if the Payment Entry creation fails.</p>
+                                
+                                <p><em>This is an automated notification from the CCAvenue payment processing system.</em></p>
+                            """,
+                            now=True
+                        )
+                    except Exception as email_error:
+                        frappe.log_error(f"Failed to send supersession email: {str(email_error)}", "CCAvenue Email Error")
+                    
+                    # Process payment for the active PR
+                    try:
+                        handle_payment_authorization_payment_request(active_pr_doc, "on_payment_authorized", "Completed")
+                        
+                        # Update active PR status
+                        active_pr_doc.db_set("status", "Paid")
+                        active_pr_doc.add_comment("Comment", text=f"Payment processed via CCAvenue {source} (original PR was cancelled). Tracking ID: {tracking_id}")
+                        
+                        # Update reference document status
+                        ref_doc = frappe.get_doc(active_pr_doc.reference_doctype, active_pr_doc.reference_name)
+                        ref_doc.db_set("status", "Paid")
+                        ref_doc.add_comment("Comment", text=f"Payment processed via CCAvenue {source} (original PR was cancelled). Tracking ID: {tracking_id}")
+                        
+                        frappe.logger().info(f"Payment processed for active Payment Request {active_pr} via {source}. Tracking ID: {tracking_id}")
+                        return True
+                        
+                    except Exception as e:
+                        error_message = f"Failed to process payment for active PR {active_pr}: {str(e)}"
+                        frappe.log_error(error_message, f"CCAvenue {source} Active PR Error")
+                        
+                        # Send email notification about the failed active PR processing
+                        try:
+                            frappe.sendmail(
+                                recipients=["dominic.v@pleasantbiz.com"],
+                                subject=f"CCAvenue Active PR Payment Processing Failed - {order_id}",
+                                message=f"""
+                                    <h3>Active PR Payment Processing Failed</h3>
+                                    <p>A CCAvenue payment could not be processed for the active Payment Request.</p>
+                                    
+                                    <h4>Payment Details:</h4>
+                                    <ul>
+                                        <li><strong>Order ID:</strong> {order_id}</li>
+                                        <li><strong>Tracking ID:</strong> {tracking_id}</li>
+                                        <li><strong>Status:</strong> {status}</li>
+                                        <li><strong>Source:</strong> {source}</li>
+                                        <li><strong>Original PR:</strong> {pr_name} (Cancelled)</li>
+                                        <li><strong>Active PR:</strong> {active_pr}</li>
+                                    </ul>
+                                    
+                                    <h4>Error Details:</h4>
+                                    <p><strong>Error:</strong> {str(e)}</p>
+                                    
+                                    <h4>Action Required:</h4>
+                                    <p>Please investigate this payment manually and ensure the customer's payment is properly recorded.</p>
+                                    
+                                    <p><em>This is an automated notification from the CCAvenue payment processing system.</em></p>
+                                """,
+                                now=True
+                            )
+                        except Exception as email_error:
+                            frappe.log_error(f"Failed to send active PR failure email: {str(email_error)}", "CCAvenue Email Error")
+                        
+                        return False
+                else:
+                    # No active PR found - this is the scenario where PR was cancelled but no new PR was created
+                    frappe.logger().info(f"No active Payment Request found. Reactivating cancelled PR {pr.name} and processing payment.")
+                    
+                    # Check if the reference document is still unpaid
+                    try:
+                        ref_doc = frappe.get_doc(pr.reference_doctype, pr.reference_name)
+                        
+                        # Check if reference document has a status field and is already paid
+                        if hasattr(ref_doc, 'status') and ref_doc.status == "Paid":
+                            frappe.logger().warning(f"Reference document {pr.reference_doctype} {pr.reference_name} is already paid. Skipping payment processing.")
+                            pr.add_comment("Comment", text=f"Payment Request reactivation skipped - reference document already paid. CCAvenue Tracking ID: {tracking_id}")
+                            return True
+                            
+                        # Also check if there are any existing Payment Entries for this reference
+                        existing_payments = frappe.db.get_all("Payment Entry", {
+                            "reference_doctype": pr.reference_doctype,
+                            "reference_name": pr.reference_name,
+                            "docstatus": 1,  # Submitted
+                            "payment_type": "Receive"
+                        }, ["name", "reference_no"])
+                        
+                        if existing_payments:
+                            frappe.logger().warning(f"Reference document {pr.reference_doctype} {pr.reference_name} already has Payment Entries: {[p.name for p in existing_payments]}. Skipping payment processing.")
+                            pr.add_comment("Comment", text=f"Payment Request reactivation skipped - reference document already has Payment Entries. CCAvenue Tracking ID: {tracking_id}")
+                            return True
+                            
+                    except Exception as e:
+                        frappe.log_error(f"Failed to check reference document status: {str(e)}", f"CCAvenue {source} Reference Check Error")
+                    
+                    # Reactivate the cancelled Payment Request
+                    pr.db_set("status", "Authorized")
+                    pr.add_comment("Comment", text=f"Payment Request reactivated after CCAvenue payment success. Tracking ID: {tracking_id}")
+                    
+                    # Send email notification about Payment Request reactivation
+                    try:
+                        frappe.sendmail(
+                            recipients=["dominic.v@pleasantbiz.com"],
+                            subject=f"CCAvenue Payment Request Reactivated - {pr_name}",
+                            message=f"""
+                                <h3>Payment Request Reactivated</h3>
+                                <p>A cancelled Payment Request has been reactivated due to a successful CCAvenue payment.</p>
+                                
+                                <h4>Payment Details:</h4>
+                                <ul>
+                                    <li><strong>Order ID:</strong> {order_id}</li>
+                                    <li><strong>Tracking ID:</strong> {tracking_id}</li>
+                                    <li><strong>Status:</strong> {status}</li>
+                                    <li><strong>Source:</strong> {source}</li>
+                                    <li><strong>Payment Request:</strong> {pr_name}</li>
+                                    <li><strong>Reference Document:</strong> {pr.reference_doctype} - {pr.reference_name}</li>
+                                    <li><strong>Amount:</strong> {pr.grand_total} {pr.currency}</li>
+                                </ul>
+                                
+                                <h4>What Happened:</h4>
+                                <p>The Payment Request was previously cancelled (likely due to customer timeout or cancellation), 
+                                but CCAvenue has now confirmed that the payment was successful. The system has automatically 
+                                reactivated the Payment Request to process the payment.</p>
+                                
+                                <h4>Next Steps:</h4>
+                                <p>The system will now attempt to create a Payment Entry for this reactivated Payment Request. 
+                                You will receive another notification if the Payment Entry creation fails.</p>
+                                
+                                <p><em>This is an automated notification from the CCAvenue payment processing system.</em></p>
+                            """,
+                            now=True
+                        )
+                    except Exception as email_error:
+                        frappe.log_error(f"Failed to send reactivation email: {str(email_error)}", "CCAvenue Email Error")
+                    
+                    # Continue with normal payment processing
+                    
         except frappe.DoesNotExistError:
-            frappe.log_error(f"Payment Request not found for order_id: {order_id}", f"CCAvenue {source} Payment Error")
+            error_message = f"Payment Request not found for order_id: {order_id}"
+            frappe.log_error(error_message, f"CCAvenue {source} Payment Error")
+            
+            # Send email notification about the missing Payment Request
+            try:
+                frappe.sendmail(
+                    recipients=["dominic.v@pleasantbiz.com"],
+                    subject=f"CCAvenue Payment Request Not Found - {order_id}",
+                    message=f"""
+                        <h3>Payment Request Not Found</h3>
+                        <p>A CCAvenue payment webhook was received but the corresponding Payment Request could not be found.</p>
+                        
+                        <h4>Payment Details:</h4>
+                        <ul>
+                            <li><strong>Order ID:</strong> {order_id}</li>
+                            <li><strong>Tracking ID:</strong> {tracking_id}</li>
+                            <li><strong>Status:</strong> {status}</li>
+                            <li><strong>Source:</strong> {source}</li>
+                            <li><strong>Expected PR:</strong> {pr_name}</li>
+                        </ul>
+                        
+                        <h4>Possible Causes:</h4>
+                        <ul>
+                            <li>Payment Request was deleted</li>
+                            <li>Order ID format is incorrect</li>
+                            <li>Integration Request is corrupted</li>
+                            <li>Database inconsistency</li>
+                        </ul>
+                        
+                        <h4>Action Required:</h4>
+                        <p>Please investigate this payment manually and ensure the customer's payment is properly recorded.</p>
+                        
+                        <p><em>This is an automated notification from the CCAvenue payment processing system.</em></p>
+                    """,
+                    now=True
+                )
+            except Exception as email_error:
+                frappe.log_error(f"Failed to send missing PR email: {str(email_error)}", "CCAvenue Email Error")
+            
             return False
         
         # Only proceed if status indicates success
@@ -403,7 +626,40 @@ def process_ccavenue_payment_safely(order_id, tracking_id, status, source="Unkno
         return True
         
     except Exception as e:
-        frappe.log_error(f"Failed to process payment for {pr_name} via {source}: {str(e)}", f"CCAvenue {source} Payment Error")
+        error_message = f"Failed to process payment for {pr_name} via {source}: {str(e)}"
+        frappe.log_error(error_message, f"CCAvenue {source} Payment Error")
+        
+        # Send email notification about the failed payment processing
+        try:
+            frappe.sendmail(
+                recipients=["dominic.v@pleasantbiz.com"],
+                subject=f"CCAvenue Payment Processing Failed - {order_id}",
+                message=f"""
+                    <h3>Payment Processing Failed</h3>
+                    <p>A CCAvenue payment could not be processed despite all recovery attempts.</p>
+                    
+                    <h4>Payment Details:</h4>
+                    <ul>
+                        <li><strong>Order ID:</strong> {order_id}</li>
+                        <li><strong>Tracking ID:</strong> {tracking_id}</li>
+                        <li><strong>Status:</strong> {status}</li>
+                        <li><strong>Source:</strong> {source}</li>
+                        <li><strong>Payment Request:</strong> {pr_name}</li>
+                    </ul>
+                    
+                    <h4>Error Details:</h4>
+                    <p><strong>Error:</strong> {str(e)}</p>
+                    
+                    <h4>Action Required:</h4>
+                    <p>Please investigate this payment manually and ensure the customer's payment is properly recorded.</p>
+                    
+                    <p><em>This is an automated notification from the CCAvenue payment processing system.</em></p>
+                """,
+                now=True
+            )
+        except Exception as email_error:
+            frappe.log_error(f"Failed to send payment failure email: {str(email_error)}", "CCAvenue Email Error")
+        
         return False
 
 def ensure_payment_entry_unique_constraint():
