@@ -86,6 +86,17 @@ def _process_payment_update(data, source):
             frappe.log_error(f"Failed to check transaction age for {order_id}: {str(e)}", f"CCAvenue {source} Age Check Error")
             # Continue processing if we can't determine the age
 
+        # 👇 Check Payment Request status before proceeding for Reconciliation
+        try:
+            pr_name = order_id.split("@")[0] if "@" in order_id else order_id
+            pr = frappe.get_doc("Payment Request", {"name": pr_name})
+            if pr.status == "Paid":
+                frappe.logger().info(f"Skipping reconciliation processing for order_id: {order_id} as Payment Request is already Paid.")
+                return
+        except Exception as e:
+            frappe.log_error(f"Failed to check Payment Request status for {order_id}: {str(e)}", f"CCAvenue {source} Status Check Error")
+            # If we can't check, continue processing
+
     # 👇 Update Integration Request (similar to normal flow)
     try:
         integration_request_name = order_id.split("@")[1] if "@" in order_id else None
