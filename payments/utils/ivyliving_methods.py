@@ -62,6 +62,9 @@ def handle_payment_authorization_payment_request(doc, method, status):
                 }
             ],
         })
+        # TODO: Remove this after testing
+        frappe.log_error(f"Payment Entry Reference No: {payment_entry.reference_no  }", "Payment Entry")
+        frappe.log_error(f"Payment Entry Reference Date: {payment_entry.reference_date  }", "Payment Entry")
         payment_entry.insert(ignore_permissions=True)
         payment_entry.submit()
     except Exception as e:
