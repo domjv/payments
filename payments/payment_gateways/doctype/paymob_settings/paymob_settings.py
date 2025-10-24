@@ -5,13 +5,10 @@ from urllib.parse import urlencode
 
 import frappe
 from frappe import _
-from frappe.integrations.utils import (
-	create_request_log,
-)
+from frappe.integrations.utils import create_request_log, make_get_request, make_post_request
 from frappe.model.document import Document
 
 from payments.payment_gateways.paymob.accept_api import AcceptAPI
-from payments.payment_gateways.paymob.connection import AcceptConnection
 from payments.payment_gateways.paymob.hmac_validator import HMACValidator
 from payments.payment_gateways.paymob.paymob_urls import PaymobUrls
 from payments.payment_gateways.paymob.response_codes import SUCCESS
@@ -43,7 +40,6 @@ class PaymobSettings(Document):
 
 	def get_payment_url(self, **kwargs):
 		try:
-			connection = AcceptConnection()
 			paymob_urls = PaymobUrls()
 
 			if not kwargs.get("order_id") or not kwargs.get("amount"):
@@ -77,12 +73,13 @@ class PaymobSettings(Document):
 			}
 
 			url = paymob_urls.get_url("payment_key")
-			code, feedback = connection.post(url=url, json=payment_key_payload)
+			headers = {"Content-Type": "application/json"}
+			response = make_post_request(url=url, json=payment_key_payload, headers=headers)
 
-			if code != SUCCESS or "token" not in feedback.data:
+			if not response or "token" not in response:
 				frappe.throw(_("Failed to retrieve payment token from Paymob"))
 
-			payment_token = feedback.data["token"]
+			payment_token = response["token"]
 
 			iframe_url = f"https://accept.paymob.com/api/acceptance/iframes/{self.iframe}?payment_token={payment_token}"
 			return iframe_url
@@ -94,7 +91,6 @@ class PaymobSettings(Document):
 	def create_order(self, **kwargs):
 		# Create integration log
 		integration_request = create_request_log(kwargs, service_name="Paymob")
-		connection = AcceptConnection()
 		paymob_urls = PaymobUrls()
 
 		# Get your API token
@@ -117,11 +113,12 @@ class PaymobSettings(Document):
 
 		try:
 			url = paymob_urls.get_url("order")
-			code, feedback = connection.post(url=url, json=payload)
-			if code != SUCCESS:
+			headers = {"Content-Type": "application/json"}
+			order = make_post_request(url=url, json=payload, headers=headers)
+
+			if not order or not order.get("id"):
 				frappe.throw(_("Failed to create order in Paymob"))
 
-			order = feedback.data
 			paymob_order_id = order.get("id")
 
 			integration_request_dict = frappe.parse_json(integration_request.data)
