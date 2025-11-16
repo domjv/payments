@@ -78,23 +78,24 @@ class CashfreeSettings(Document):
 	)
 
 	def validate(self):
-		# Create or update payment gateway
+		# Set webhook URL
+		self.set_webhook_url()
+		
+		# Validate credentials
+		if not self.flags.ignore_mandatory:
+			self.validate_cashfree_credentials()
+		
+		# Handle default setting
+		self.handle_default_setting()
+	
+	def on_update(self):
+		# Create or update payment gateway after the document is saved
 		create_payment_gateway(
 			"Cashfree-" + self.gateway_name,
 			settings="Cashfree Settings",
 			controller=self.name,
 		)
 		call_hook_method("payment_gateway_enabled", gateway="Cashfree-" + self.gateway_name)
-		
-		# Validate credentials
-		if not self.flags.ignore_mandatory:
-			self.validate_cashfree_credentials()
-		
-		# Set webhook URL
-		self.set_webhook_url()
-		
-		# Handle default setting
-		self.handle_default_setting()
 
 	def set_webhook_url(self):
 		"""Set the webhook URL for Cashfree configuration"""
