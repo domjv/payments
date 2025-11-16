@@ -139,10 +139,12 @@ class CashfreeSettings(Document):
 				
 				# Note: Cashfree SDK doesn't have a simple test endpoint
 				# Credentials will be validated on first order creation
+				# Just log success if SDK imports work
+				frappe.msgprint(_("Cashfree SDK configured successfully. Credentials will be validated on first transaction."), indicator="green")
 				
 			except Exception as e:
 				frappe.log_error(frappe.get_traceback(), "Cashfree Credential Validation Failed")
-				frappe.throw(_("Invalid Cashfree credentials. Please check your Client ID and Client Secret."))
+				frappe.msgprint(_("Warning: Could not configure Cashfree SDK. Please check your credentials."), indicator="orange")
 
 	def validate_transaction_currency(self, currency):
 		"""Check if the currency is supported by Cashfree"""
