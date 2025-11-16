@@ -1,0 +1,62 @@
+{% extends "templates/web.html" %}
+
+{% block title %} Payment {% endblock %}
+
+{%- block header -%}{% endblock %}
+
+{% block script %}
+<script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
+<script>{% include "templates/includes/cashfree_checkout.js" %}</script>
+{% endblock %}
+
+{%- block page_content -%}
+
+<div class="container mt-5">
+	<div class="row">
+		<div class="col-md-6 offset-md-3">
+			<div class="card">
+				<div class="card-header">
+					<h4>{{ _("Payment Details") }}</h4>
+				</div>
+				<div class="card-body">
+					<p><strong>{{ _("Title") }}:</strong> {{ title }}</p>
+					<p><strong>{{ _("Description") }}:</strong> {{ description }}</p>
+					<p><strong>{{ _("Amount") }}:</strong> {{ currency }} {{ amount }}</p>
+					<p><strong>{{ _("Customer") }}:</strong> {{ payer_name }}</p>
+					<p><strong>{{ _("Email") }}:</strong> {{ payer_email }}</p>
+					
+					<div class="mt-4">
+						<p class='lead text-center'>
+							<span class='cashfree-loading'>{{ _("Loading Payment System...") }}</span>
+							<span class='cashfree-processing hidden'>{{ _("Processing Payment...") }}</span>
+							<span class='cashfree-confirming hidden'>{{ _("Confirming Payment...") }}</span>
+						</p>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+
+{% endblock %}
+
+{% block style %}
+<style>
+	header, footer {
+		display: none;
+	}
+	
+	.hidden {
+		display: none !important;
+	}
+	
+	.card {
+		box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+	}
+	
+	.card-header {
+		background-color: #f8f9fa;
+		border-bottom: 2px solid #dee2e6;
+	}
+</style>
+{% endblock %}
