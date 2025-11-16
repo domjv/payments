@@ -1,0 +1,69 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-04-23 16:35:25.084126",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "charge_name",
+  "charge_percent",
+  "column_break_fopg",
+  "disabled"
+ ],
+ "fields": [
+  {
+   "fieldname": "charge_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Charge Name",
+   "reqd": 1
+  },
+  {
+   "description": "It should be in full decimal between 0 to 100, like for 1% it will have value 1.00, for 0.5% it will have 0.50.",
+   "fieldname": "charge_percent",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Charge Percent",
+   "non_negative": 1,
+   "precision": "9",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_fopg",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2025-04-25 10:56:12.960089",
+ "modified_by": "Administrator",
+ "module": "Payments",
+ "name": "Payment Charge",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
