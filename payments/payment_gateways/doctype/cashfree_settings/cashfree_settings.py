@@ -81,10 +81,6 @@ class CashfreeSettings(Document):
 		# Set webhook URL
 		self.set_webhook_url()
 		
-		# Validate credentials
-		if not self.flags.ignore_mandatory:
-			self.validate_cashfree_credentials()
-		
 		# Handle default setting
 		self.handle_default_setting()
 	
@@ -96,6 +92,17 @@ class CashfreeSettings(Document):
 			controller=self.name,
 		)
 		call_hook_method("payment_gateway_enabled", gateway="Cashfree-" + self.gateway_name)
+		
+		# Validate credentials after save
+		if not self.flags.ignore_mandatory and self.client_id and self.client_secret:
+			try:
+				self.validate_cashfree_credentials()
+			except Exception as e:
+				frappe.log_error(frappe.get_traceback(), "Cashfree Credential Validation")
+				frappe.msgprint(
+					_("Warning: Could not validate Cashfree credentials. Please check your settings."),
+					indicator="orange"
+				)
 
 	def set_webhook_url(self):
 		"""Set the webhook URL for Cashfree configuration"""
