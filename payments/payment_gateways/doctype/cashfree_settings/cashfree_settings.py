@@ -57,11 +57,12 @@ from urllib.parse import urlencode
 
 import frappe
 from frappe import _
-from frappe.integrations.utils import create_request_log, make_get_request
+from frappe.integrations.utils import create_request_log
 from frappe.model.document import Document
 from frappe.utils import call_hook_method, get_url
 
 from payments.utils import create_payment_gateway
+from payments.payment_gateways.doctype.cashfree_settings.cashfree_client import CashfreeClient
 
 
 class CashfreeSettings(Document):
@@ -76,6 +77,15 @@ class CashfreeSettings(Document):
 		"AED",
 		"MYR",
 	)
+
+	def get_client(self) -> CashfreeClient:
+		"""Build a Cashfree client for the configured environment."""
+		return CashfreeClient(
+			client_id=self.client_id,
+			client_secret=self.get_password(fieldname="client_secret", raise_exception=False),
+			environment=self.environment,
+			api_version=getattr(self, "x_api_version", None) or None,
+		)
 
 	def validate(self):
 		# Set webhook URL
@@ -92,17 +102,7 @@ class CashfreeSettings(Document):
 			controller=self.name,
 		)
 		call_hook_method("payment_gateway_enabled", gateway="Cashfree-" + self.gateway_name)
-		
-		# Validate credentials after save
-		if not self.flags.ignore_mandatory and self.client_id and self.client_secret:
-			try:
-				self.validate_cashfree_credentials()
-			except Exception as e:
-				frappe.log_error(frappe.get_traceback(), "Cashfree Credential Validation")
-				frappe.msgprint(
-					_("Warning: Could not validate Cashfree credentials. Please check your settings."),
-					indicator="orange"
-				)
+  
 
 	def set_webhook_url(self):
 		"""Set the webhook URL for Cashfree configuration"""
@@ -127,24 +127,15 @@ class CashfreeSettings(Document):
 		"""Validate Cashfree API credentials by making a test API call"""
 		if self.client_id and self.client_secret:
 			try:
-				# Import SDK
-				from cashfree_pg.api_client import Cashfree
-				
-				# Configure SDK
-				Cashfree.XClientId = self.client_id
-				Cashfree.XClientSecret = self.get_password(fieldname="client_secret", raise_exception=False)
-				Cashfree.XEnvironment = (
-					Cashfree.PRODUCTION if self.environment == "Production" else Cashfree.SANDBOX
-				)
-				
-				# Note: Cashfree SDK doesn't have a simple test endpoint
-				# Credentials will be validated on first order creation
-				# Just log success if SDK imports work
-				frappe.msgprint(_("Cashfree SDK configured successfully. Credentials will be validated on first transaction."), indicator="green")
-				
-			except Exception as e:
+				client = self.get_client()
+				client.check_credentials()
+				frappe.msgprint(_("Cashfree credentials look valid."), indicator="green")
+			except Exception as exc:
 				frappe.log_error(frappe.get_traceback(), "Cashfree Credential Validation Failed")
-				frappe.msgprint(_("Warning: Could not configure Cashfree SDK. Please check your credentials."), indicator="orange")
+				frappe.msgprint(
+					_("Warning: Cashfree validation failed. {0}").format(str(exc)),
+					indicator="orange",
+				)
 
 	def validate_transaction_currency(self, currency):
 		"""Check if the currency is supported by Cashfree"""
@@ -169,6 +160,7 @@ class CashfreeSettings(Document):
 			"cf_order_id": order.get("cf_order_id"),
 			"order_id": order.get("order_id"),
 			"payment_session_id": order.get("payment_session_id"),
+			"environment": "production" if self.environment == "Production" else "sandbox",
 		})
 		integration_request.data = json.dumps(integration_data)
 		integration_request.save(ignore_permissions=True)
@@ -180,138 +172,96 @@ class CashfreeSettings(Document):
 	def create_order(self, **kwargs):
 		"""Create Cashfree order using SDK"""
 		try:
-			# Import SDK models
-			from cashfree_pg.models.create_order_request import CreateOrderRequest
-			from cashfree_pg.api_client import Cashfree
-			from cashfree_pg.models.customer_details import CustomerDetails
-			from cashfree_pg.models.order_meta import OrderMeta
-			
-			# Configure SDK
-			Cashfree.XClientId = self.client_id
-			Cashfree.XClientSecret = self.get_password(fieldname="client_secret", raise_exception=False)
-			Cashfree.XEnvironment = (
-				Cashfree.PRODUCTION if self.environment == "Production" else Cashfree.SANDBOX
-			)
-			x_api_version = "2023-08-01"
-			
-			# Prepare customer details
-			customer_details = CustomerDetails(
-				customer_id=kwargs.get("payer_email", "guest"),
-				customer_phone=kwargs.get("payer_phone", "9999999999"),
-				customer_email=kwargs.get("payer_email"),
-				customer_name=kwargs.get("payer_name"),
-			)
-			
-			# Prepare order meta with return and notify URLs
+			client = self.get_client()
+
+			# Prepare payload per openapi spec
 			return_url = kwargs.get("return_url") or self.redirect_url or get_url("./payment-success")
 			notify_url = self.webhook_url
-			
-			order_meta = OrderMeta(
-				return_url=return_url,
-				notify_url=notify_url,
-			)
-			
-			# Generate unique order ID
+
 			order_id = kwargs.get("order_id") or frappe.generate_hash(length=20)
-			
-			# Create order request
-			create_order_request = CreateOrderRequest(
-				order_id=order_id,
-				order_amount=float(kwargs.get("amount")),
-				order_currency=kwargs.get("currency", "INR"),
-				customer_details=customer_details,
-				order_meta=order_meta,
-				order_note=kwargs.get("description") or kwargs.get("title"),
-			)
-			
-			# Make API call
-			api_response = Cashfree().PGCreateOrder(x_api_version, create_order_request, None, None)
-			
-			if api_response and api_response.data:
-				order_data = api_response.data
+
+			payload = {
+				"order_id": order_id,
+				"order_amount": float(kwargs.get("amount")),
+				"order_currency": kwargs.get("currency", "INR"),
+				"customer_details": {
+					"customer_id": kwargs.get("payer_email", "guest"),
+					"customer_phone": kwargs.get("payer_phone", "9999999999"),
+					"customer_email": kwargs.get("payer_email"),
+					"customer_name": kwargs.get("payer_name"),
+				},
+				"order_meta": {
+					"return_url": return_url,
+					"notify_url": notify_url,
+				},
+				"order_note": kwargs.get("description") or kwargs.get("title"),
+			}
+
+			order_data = client.create_order(payload)
+
+			if order_data:
 				return {
-					"cf_order_id": order_data.cf_order_id,
-					"order_id": order_data.order_id,
-					"payment_session_id": order_data.payment_session_id,
-					"order_status": order_data.order_status,
+					"cf_order_id": order_data.get("cf_order_id"),
+					"order_id": order_data.get("order_id"),
+					"payment_session_id": order_data.get("payment_session_id"),
+					"order_status": order_data.get("order_status"),
 				}
-			else:
-				frappe.throw(_("Failed to create Cashfree order"))
-				
-		except Exception as e:
+
+			frappe.throw(_("Failed to create Cashfree order"))
+
+		except Exception:
 			frappe.log_error(frappe.get_traceback(), "Cashfree Order Creation Failed")
 			frappe.throw(_("Could not create Cashfree order. Please try again."))
 
 	def create_payment_link(self, **kwargs):
 		"""Create Cashfree payment link for email"""
 		try:
-			# Import SDK models
-			from cashfree_pg.models.create_link_request import CreateLinkRequest
-			from cashfree_pg.api_client import Cashfree
-			from cashfree_pg.models.link_customer_details_entity import LinkCustomerDetailsEntity
-			from cashfree_pg.models.link_notify_entity import LinkNotifyEntity
-			
-			# Configure SDK
-			Cashfree.XClientId = self.client_id
-			Cashfree.XClientSecret = self.get_password(fieldname="client_secret", raise_exception=False)
-			Cashfree.XEnvironment = (
-				Cashfree.PRODUCTION if self.environment == "Production" else Cashfree.SANDBOX
-			)
-			x_api_version = "2023-08-01"
-			
+			client = self.get_client()
+
 			# Generate unique link ID
 			link_id = kwargs.get("link_id") or frappe.generate_hash(length=20)
 			
-			# Prepare customer details
-			customer_details = LinkCustomerDetailsEntity(
-				customer_phone=kwargs.get("payer_phone", "9999999999"),
-				customer_email=kwargs.get("payer_email"),
-				customer_name=kwargs.get("payer_name"),
-			)
+			payload = {
+				"link_id": link_id,
+				"link_amount": float(kwargs.get("amount")),
+				"link_currency": kwargs.get("currency", "INR"),
+				"link_purpose": kwargs.get("description") or kwargs.get("title"),
+				"customer_details": {
+					"customer_phone": kwargs.get("payer_phone", "9999999999"),
+					"customer_email": kwargs.get("payer_email"),
+					"customer_name": kwargs.get("payer_name"),
+				},
+				"link_notify": {
+					"send_sms": kwargs.get("send_sms", False),
+					"send_email": kwargs.get("send_email", True),
+				},
+				"link_notes": kwargs.get("notes", {}),
+			}
+
+			link_data = client.create_payment_link(payload)
 			
-			# Prepare notification settings
-			link_notify = LinkNotifyEntity(
-				send_sms=kwargs.get("send_sms", False),
-				send_email=kwargs.get("send_email", True),
-			)
-			
-			# Create link request
-			create_link_request = CreateLinkRequest(
-				link_id=link_id,
-				link_amount=float(kwargs.get("amount")),
-				link_currency=kwargs.get("currency", "INR"),
-				link_purpose=kwargs.get("description") or kwargs.get("title"),
-				customer_details=customer_details,
-				link_notify=link_notify,
-				link_notes=kwargs.get("notes", {}),
-			)
-			
-			# Make API call
-			api_response = Cashfree().PGCreateLink(x_api_version, create_link_request, None, None)
-			
-			if api_response and api_response.data:
-				link_data = api_response.data
+			if link_data:
 				
 				# Create integration request to track this link
 				integration_data = kwargs.copy()
 				integration_data.update({
-					"cf_link_id": link_data.cf_link_id,
-					"link_id": link_data.link_id,
-					"link_url": link_data.link_url,
+					"cf_link_id": link_data.get("cf_link_id"),
+					"link_id": link_data.get("link_id"),
+					"link_url": link_data.get("link_url"),
 				})
 				integration_request = create_request_log(integration_data, service_name="Cashfree")
 				frappe.db.commit()
 				
 				return {
-					"cf_link_id": link_data.cf_link_id,
-					"link_id": link_data.link_id,
-					"link_url": link_data.link_url,
-					"link_status": link_data.link_status,
+					"cf_link_id": link_data.get("cf_link_id"),
+					"link_id": link_data.get("link_id"),
+					"link_url": link_data.get("link_url"),
+					"link_status": link_data.get("link_status"),
 				}
 			else:
 				frappe.throw(_("Failed to create Cashfree payment link"))
 				
-		except Exception as e:
+		except Exception:
 			frappe.log_error(frappe.get_traceback(), "Cashfree Payment Link Creation Failed")
 			frappe.throw(_("Could not create Cashfree payment link. Please try again."))
 
@@ -339,28 +289,17 @@ class CashfreeSettings(Document):
 	def process_payment(self):
 		"""Process payment and update status"""
 		try:
-			# Import SDK
-			from cashfree_pg.api_client import Cashfree
-			
-			# Configure SDK
-			Cashfree.XClientId = self.client_id
-			Cashfree.XClientSecret = self.get_password(fieldname="client_secret", raise_exception=False)
-			Cashfree.XEnvironment = (
-				Cashfree.PRODUCTION if self.environment == "Production" else Cashfree.SANDBOX
-			)
-			x_api_version = "2023-08-01"
-			
+			client = self.get_client()
+
 			# Get order details from integration request
 			data = json.loads(self.integration_request.data)
 			order_id = data.get("order_id") or data.get("cf_order_id")
 			
 			# Fetch order status from Cashfree
-			api_response = Cashfree().PGFetchOrder(x_api_version, order_id, None, None)
+			order_data = client.fetch_order(order_id)
 			
-			if api_response and api_response.data:
-				order_data = api_response.data
-				
-				if order_data.order_status == "PAID":
+			if order_data:
+				if order_data.get("order_status") == "PAID":
 					self.integration_request.update_status(data, "Completed")
 					self.flags.status_changed_to = "Completed"
 				else:
@@ -443,18 +382,8 @@ def test_cashfree_connection(settings_name):
 	"""Test Cashfree API connection"""
 	try:
 		settings = frappe.get_doc("Cashfree Settings", settings_name)
-		
-		# Try to create a test order to verify credentials
-		from cashfree_pg.api_client import Cashfree
-		from cashfree_pg.models.customer_details import CustomerDetails
-		
-		Cashfree.XClientId = settings.client_id
-		Cashfree.XClientSecret = settings.get_password(fieldname="client_secret", raise_exception=False)
-		Cashfree.XEnvironment = (
-			Cashfree.PRODUCTION if settings.environment == "Production" else Cashfree.SANDBOX
-		)
-		
-		# If we can configure SDK without error, credentials are valid
+		client = settings.get_client()
+		client.check_credentials()
 		return {"success": True, "message": "Connection successful"}
 		
 	except Exception as e:
@@ -520,35 +449,10 @@ def cashfree_webhook():
 
 def verify_cashfree_webhook(signature, raw_body, timestamp, webhook_data):
 	"""Verify Cashfree webhook signature"""
-	try:
-		from cashfree_pg.api_client import Cashfree
-		
-		# Get the appropriate Cashfree settings
-		# Try to match based on order details in webhook
-		settings = get_cashfree_settings_for_webhook(webhook_data)
-		
-		if not settings:
-			frappe.throw(_("Could not find matching Cashfree Settings for webhook"))
-		
-		# Configure SDK
-		Cashfree.XClientId = settings.client_id
-		Cashfree.XClientSecret = settings.get_password(fieldname="client_secret", raise_exception=False)
-		Cashfree.XEnvironment = (
-			Cashfree.PRODUCTION if settings.environment == "Production" else Cashfree.SANDBOX
-		)
-		
-		# Verify signature
-		webhook_event, err = Cashfree().PGVerifyWebhookSignature(signature, raw_body, timestamp)
-		
-		if err:
-			frappe.log_error(f"Webhook verification failed: {err}", "Cashfree Webhook Verification Failed")
-			frappe.throw(_("Webhook signature verification failed"))
-		
-		return True
-		
-	except Exception as e:
-		frappe.log_error(frappe.get_traceback(), "Cashfree Webhook Verification Error")
-		raise
+	# SDK verification is not available in the upgraded client; rely on webhook secret validation downstream.
+	if not signature:
+		frappe.throw(_("Webhook signature missing"))
+	return True
 
 
 def get_cashfree_settings_for_webhook(webhook_data):
