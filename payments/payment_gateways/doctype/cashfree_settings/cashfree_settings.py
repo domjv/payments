@@ -180,6 +180,13 @@ class CashfreeSettings(Document):
 	def create_order(self, **kwargs):
 		"""Create Cashfree order using SDK"""
 		try:
+			# Validate required customer information
+			payer_email = kwargs.get("payer_email")
+			payer_phone = kwargs.get("payer_phone")
+			
+			if not payer_email or not payer_phone:
+				frappe.throw(_("Customer must have email and phone number for Cashfree payment"))
+			
 			client = self.get_client()
 
 			# Prepare payload per openapi spec
@@ -193,10 +200,10 @@ class CashfreeSettings(Document):
 				"order_amount": float(kwargs.get("amount")),
 				"order_currency": kwargs.get("currency", "INR"),
 				"customer_details": {
-					"customer_id": kwargs.get("payer_email", "guest"),
-					"customer_phone": kwargs.get("payer_phone", "9999999999"),
-					"customer_email": kwargs.get("payer_email"),
-					"customer_name": kwargs.get("payer_name"),
+					"customer_id": payer_email,
+					"customer_phone": payer_phone,
+					"customer_email": payer_email,
+					"customer_name": kwargs.get("payer_name") or payer_email,
 				},
 				"order_meta": {
 					"return_url": return_url,
