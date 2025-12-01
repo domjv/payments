@@ -80,9 +80,17 @@ class CashfreeSettings(Document):
 
 	def get_client(self) -> CashfreeClient:
 		"""Build a Cashfree client for the configured environment."""
+		client_secret = self.get_password(fieldname="client_secret", raise_exception=False)
+		
+		if not self.client_id:
+			frappe.throw(_("Client ID is required for Cashfree integration"))
+		
+		if not client_secret:
+			frappe.throw(_("Client Secret is required for Cashfree integration"))
+		
 		return CashfreeClient(
 			client_id=self.client_id,
-			client_secret=self.get_password(fieldname="client_secret", raise_exception=False),
+			client_secret=client_secret,
 			environment=self.environment,
 			api_version=getattr(self, "x_api_version", None) or None,
 		)
@@ -209,9 +217,27 @@ class CashfreeSettings(Document):
 
 			frappe.throw(_("Failed to create Cashfree order"))
 
-		except Exception:
+		except frappe.ValidationError:
+			# Re-raise validation errors (like missing credentials)
+			raise
+		except Exception as e:
+			error_msg = str(e)
 			frappe.log_error(frappe.get_traceback(), "Cashfree Order Creation Failed")
-			frappe.throw(_("Could not create Cashfree order. Please try again."))
+			
+			# Extract meaningful error message from Cashfree API response
+			if "Authentication Failed" in error_msg:
+				frappe.throw(_("Cashfree authentication failed. Please check your Client ID and Client Secret."))
+			elif "error from Cashfree:" in error_msg:
+				# Extract the JSON error from the HTTPError message
+				try:
+					error_start = error_msg.find("{")
+					if error_start != -1:
+						error_json = error_msg[error_start:]
+						frappe.throw(_("Cashfree API error: {0}").format(error_json))
+				except Exception:
+					pass
+			
+			frappe.throw(_("Could not create Cashfree order: {0}").format(error_msg))
 
 	def create_payment_link(self, **kwargs):
 		"""Create Cashfree payment link for email"""
