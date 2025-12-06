@@ -184,6 +184,7 @@ class CashfreeSettings(Document):
 			payer_email = kwargs.get("payer_email")
 			payer_phone = kwargs.get("payer_phone")
 			payer_name = kwargs.get("payer_name")
+			customer_id = kwargs.get("customer_id") or frappe.generate_hash(length=10)
 			
 			# If phone is missing, try to fetch from Payment Request or Customer
 			if not payer_phone:
@@ -194,7 +195,7 @@ class CashfreeSettings(Document):
 						# Try to get phone from the party (Customer/Supplier)
 						if payment_request.party_type and payment_request.party:
 							party = frappe.get_doc(payment_request.party_type, payment_request.party)
-
+							customer_id = party.name.replace('-', '')
 							if payment_request.party_type == "Customer":
 								payer_phone = party.custom_student_phone_number
 								# Also get email if not provided
@@ -235,7 +236,7 @@ class CashfreeSettings(Document):
 				"order_amount": float(kwargs.get("amount")),
 				"order_currency": kwargs.get("currency", "INR"),
 				"customer_details": {
-					"customer_id": payer_email,
+					"customer_id": customer_id,
 					"customer_phone": str(payer_phone),
 					"customer_email": payer_email,
 					"customer_name": payer_name or payer_email,
