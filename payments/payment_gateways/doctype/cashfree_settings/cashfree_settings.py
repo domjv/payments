@@ -197,7 +197,7 @@ class CashfreeSettings(Document):
 							party = frappe.get_doc(payment_request.party_type, payment_request.party)
 							customer_id = party.name.replace('-', '')
 							if payment_request.party_type == "Customer":
-								payer_phone = party.custom_student_phone_number
+								payer_phone = party.custom_student_phone_number.replace('-', '')
 								# Also get email if not provided
 								if not payer_email:
 									payer_email = party.custom_student_email
