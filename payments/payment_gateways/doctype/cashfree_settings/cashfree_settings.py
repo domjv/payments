@@ -180,12 +180,47 @@ class CashfreeSettings(Document):
 	def create_order(self, **kwargs):
 		"""Create Cashfree order using SDK"""
 		try:
-			# Validate required customer information
+			# Get customer information
 			payer_email = kwargs.get("payer_email")
 			payer_phone = kwargs.get("payer_phone")
+			payer_name = kwargs.get("payer_name")
 			
-			if not payer_email or not payer_phone:
-				frappe.throw(_("Customer must have email and phone number for Cashfree payment"))
+			# If phone is missing, try to fetch from Payment Request or Customer
+			if not payer_phone:
+				if kwargs.get("reference_doctype") == "Payment Request" and kwargs.get("reference_docname"):
+					try:
+						payment_request = frappe.get_doc("Payment Request", kwargs.get("reference_docname"))
+						
+						# Try to get phone from the party (Customer/Supplier)
+						if payment_request.party_type and payment_request.party:
+							party = frappe.get_doc(payment_request.party_type, payment_request.party)
+
+							if payment_request.party_type == "Customer":
+								payer_phone = party.custom_student_phone_number
+								# Also get email if not provided
+								if not payer_email:
+									payer_email = party.custom_student_email
+								if not payer_name:
+									payer_name = party.customer_name
+							elif payment_request.party_type == "Supplier":
+								payer_phone = frappe.db.get_value("Contact",
+									{"link_doctype": "Supplier", "link_name": party.name},
+									"mobile_no"
+								)
+								if not payer_email:
+									payer_email = frappe.db.get_value("Contact",
+										{"link_doctype": "Supplier", "link_name": party.name},
+										"email_id"
+									)
+					except Exception as e:
+						frappe.log_error(f"Error fetching customer details: {str(e)}", "Cashfree Order Creation")
+			
+			# Validate required customer information
+			if not payer_email:
+				frappe.throw(_("Customer email is required for Cashfree payment"))
+			
+			if not payer_phone:
+				frappe.throw(_("Customer phone number is required for Cashfree payment. Please update the customer record with a valid phone number."))
 			
 			client = self.get_client()
 
@@ -201,9 +236,9 @@ class CashfreeSettings(Document):
 				"order_currency": kwargs.get("currency", "INR"),
 				"customer_details": {
 					"customer_id": payer_email,
-					"customer_phone": payer_phone,
+					"customer_phone": str(payer_phone),
 					"customer_email": payer_email,
-					"customer_name": kwargs.get("payer_name") or payer_email,
+					"customer_name": payer_name or payer_email,
 				},
 				"order_meta": {
 					"return_url": return_url,
