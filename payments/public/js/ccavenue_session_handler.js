@@ -1,3 +1,6 @@
+// DEPRECATED: This session handler is for ERPNext webforms only.
+// Not needed for API-based integration with external frontend/mobile apps.
+
 frappe.provide("payments.ccavenue");
 
 payments.ccavenue.checkAndRestoreSession = function() {

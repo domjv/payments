@@ -7,6 +7,7 @@
  "engine": "InnoDB",
  "field_order": [
   "merchant_name",
+  "is_default",
   "merchant_id",
   "access_code",
   "encryption_key",
@@ -23,6 +24,14 @@
    "in_list_view": 1,
    "label": "Merchant Name",
    "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "Mark this merchant as the default/parent company merchant. Only one merchant can be default.",
+   "fieldname": "is_default",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Is Default Merchant"
   },
   {
    "fieldname": "merchant_id",

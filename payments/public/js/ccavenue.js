@@ -1,7 +1,11 @@
 // Copyright (c) 2024, Frappe Technologies and contributors
 // For license information, please see license.txt
 
-/* HOW-TO
+/* DEPRECATED: This ERPNext-specific JS is deprecated.
+ * Use API endpoints for NextJS/React Native integration.
+ * See CCAVENUE_API_INTEGRATION.md for details.
+ *
+ * HOW-TO (DEPRECATED)
 
 CCAvenue Payment
 

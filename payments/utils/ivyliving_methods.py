@@ -86,8 +86,24 @@ def handle_payment_authorization_customer(doc, method, status):
     item_prices = [item.split("=")[1].strip() for item in item_codes_and_prices]
     merchant_name = request_data.get("custom_merchant_name")
     merchant_dict = {}
+    
+    # Use the new merchant selection logic
     if merchant_name:
-        merchant_dict = frappe.get_doc("CCAvenue Merchant", merchant_name).as_dict()
+        try:
+            merchant_dict = frappe.get_doc("CCAvenue Merchant", merchant_name).as_dict()
+        except:
+            frappe.log_error(f"Merchant {merchant_name} not found, using default")
+            merchant_dict = {}
+    
+    # If no explicit merchant, try to get from company or default
+    if not merchant_dict:
+        company = doc.custom_hostel_name
+        settings = frappe.get_doc("CCAvenue Settings")
+        merchant_doc = settings.get_merchant_for_company(company=company)
+        if merchant_doc:
+            merchant_dict = merchant_doc.as_dict()
+            merchant_name = merchant_doc.name
+    
     total_amount = 0
     for item_price in item_prices:
         total_amount = total_amount + float(item_price)
@@ -102,7 +118,7 @@ def handle_payment_authorization_customer(doc, method, status):
             bank_account_name = merchant_dict.get("bank_account")
         if merchant_dict.get("debtors_account") is not None and merchant_dict.get("debtors_account") != "":
             debtors_account_name = merchant_dict.get("debtors_account")
-        remarks = remarks + f" for merchant name = {merchant_name}"
+        remarks = remarks + f" | Merchant: {merchant_name}"
     default_currency = frappe.db.get_value("Company", company, "default_currency")
     company_abbr = frappe.db.get_value("Company", company, "abbr")
 
@@ -269,18 +285,27 @@ def handle_cart_submit():
         customer = frappe.get_doc("Customer", customer_id)
 
         total_money_to_pay = round(total_amount, 2)
-        payment_url = controller.get_payment_url(
-            amount=total_money_to_pay,
-            currency="INR",
-            description=remarks,
-            order_id = customer.customer_name,
-            payer_name=customer.customer_name,
-            payer_email=frappe.session.user,
-            payment_gateway="CCAvenue",
-            reference_docname=customer.name,
-            reference_doctype="Customer",
-            custom_merchant_name=merchant_name,
-        )
+        
+        # Prepare payment details
+        # Note: order_id will be automatically set to Integration Request name by get_payment_url
+        payment_details = {
+            "amount": total_money_to_pay,
+            "currency": "INR",
+            "description": remarks,
+            "payer_name": customer.name,  # Customer ID for reference
+            "payer_email": frappe.session.user,
+            "payment_gateway": "CCAvenue",
+            "reference_docname": customer.name,
+            "reference_doctype": "Customer",
+            "company": customer.get("custom_hostel_name")  # Pass company for merchant selection
+        }
+        
+        # Add merchant name if explicitly provided
+        if merchant_name:
+            payment_details["custom_merchant_name"] = merchant_name
+        
+        # This will create an Integration Request and use its name as order_id
+        payment_url = controller.get_payment_url(**payment_details)
 
 
         if not payment_url:

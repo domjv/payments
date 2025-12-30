@@ -1,4 +1,12 @@
 # License: MIT. See LICENSE
+
+# DEPRECATED: This web-based checkout is deprecated in favor of API-based integration.
+# For new implementations, use the API endpoints:
+# - initiate_payment: To create payment requests from frontend/mobile
+# - webhook_callback: To handle payment callbacks
+# - check_payment_status: To verify payment status
+# See CCAVENUE_API_INTEGRATION.md for details.
+
 import json
 
 import frappe
