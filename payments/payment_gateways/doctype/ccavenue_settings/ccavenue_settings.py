@@ -186,6 +186,7 @@ class CCAvenueSettings(Document):
             self.integration_request.update_status(data, "Failed")
 
         redirect_to = data.get("redirect_to") or None
+        frappe.log_error(f"CCAvenue Redirect To: {redirect_to}", "CCAvenue Payment Redirect")
         redirect_message = data.get("redirect_message") or None
 
         if self.flags.status_changed_to == "Completed":
