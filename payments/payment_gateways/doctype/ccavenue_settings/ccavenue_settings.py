@@ -175,6 +175,7 @@ class CCAvenueSettings(Document):
         Authorize payment when user submits the form on CCAvenue page
         """
         data = self.data
+        frappe.log_error(f"CCAvenue Payment Data: {json.dumps(data)}", "CCAvenue Payment Data")
 
         # Get payment status from data
         if data.get("order_status") == "Success":
