@@ -256,7 +256,7 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 			
 			# Get tracking ID and other payment details
 			tracking_id = data.get("tracking_id", "")
-			payment_mode_name = data.get("payment_mode", "CCAvenue")
+			payment_mode_name = "CCAvenue"
 			bank_ref_no = data.get("bank_ref_no", "")
 			
 			# Get merchant details from integration request
