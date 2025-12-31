@@ -96,8 +96,29 @@ class CustomSalesInvoice(SalesInvoice):
 		
 		# Get tracking ID and other payment details
 		tracking_id = data.get("tracking_id", "")
-		payment_mode_name = data.get("payment_mode", "CCAvenue")
+		payment_mode_name = "CCAvenue"
 		bank_ref_no = data.get("bank_ref_no", "")
+		
+		# # Validate and get mode of payment
+		# if not frappe.db.exists("Mode of Payment", payment_mode_name):
+		# 	# Try common alternatives
+		# 	alternatives = ["CCAvenue", "Online Payment", "Online", "Bank Transfer"]
+		# 	payment_mode_name = None
+		# 	for alt in alternatives:
+		# 		if frappe.db.exists("Mode of Payment", alt):
+		# 			payment_mode_name = alt
+		# 			break
+			
+		# 	# If still not found, create a default CCAvenue mode
+		# 	if not payment_mode_name:
+		# 		if not frappe.db.exists("Mode of Payment", "CCAvenue"):
+		# 			mode_of_payment = frappe.get_doc({
+		# 				"doctype": "Mode of Payment",
+		# 				"mode_of_payment": "CCAvenue",
+		# 				"type": "Bank"
+		# 			})
+		# 			mode_of_payment.insert(ignore_permissions=True)
+		# 		payment_mode_name = "CCAvenue"
 		
 		# Get merchant details from integration request
 		merchant_name = data.get("custom_merchant_name")
