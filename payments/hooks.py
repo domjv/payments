@@ -121,6 +121,9 @@ doc_events = {
 	},
 	"Customer":{
 		"on_payment_authorized":"payments.utils.ivyliving_methods.handle_payment_authorization_customer"
+	},
+	"Sales Invoice": {
+		"on_payment_authorized": "payments.overrides.sales_invoice.handle_payment_authorization_sales_invoice"
 	}
 }
 
