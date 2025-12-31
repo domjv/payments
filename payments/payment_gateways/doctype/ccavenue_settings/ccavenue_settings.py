@@ -194,9 +194,26 @@ class CCAvenueSettings(Document):
             if self.data.reference_doctype and self.data.reference_docname:
                 custom_redirect_to = None
                 try:
-                    custom_redirect_to = frappe.get_doc(
-                        self.data.reference_doctype, self.data.reference_docname
-                    ).run_method("on_payment_authorized", self.flags.status_changed_to)
+                    # Get the document
+                    doc = frappe.get_doc(self.data.reference_doctype, self.data.reference_docname)
+                    
+                    # Log the document class to verify override is working
+                    frappe.log_error(
+                        f"Calling on_payment_authorized on {self.data.reference_doctype} {self.data.reference_docname}\n"
+                        f"Document class: {type(doc).__name__}\n"
+                        f"Has method: {hasattr(doc, 'on_payment_authorized')}\n"
+                        f"Payment status: {self.flags.status_changed_to}",
+                        "CCAvenue Payment Authorization - Before Call"
+                    )
+                    
+                    # Call the method
+                    custom_redirect_to = doc.run_method("on_payment_authorized", self.flags.status_changed_to)
+                    
+                    frappe.log_error(
+                        f"on_payment_authorized completed for {self.data.reference_doctype} {self.data.reference_docname}\n"
+                        f"Returned redirect: {custom_redirect_to}",
+                        "CCAvenue Payment Authorization - After Call"
+                    )
                 except Exception as e:
                     frappe.log_error(
                         f"Error in on_payment_authorized for {self.data.reference_doctype} {self.data.reference_docname}: {str(e)}\n{frappe.get_traceback()}",
