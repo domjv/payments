@@ -175,8 +175,7 @@ class CCAvenueSettings(Document):
         Authorize payment when user submits the form on CCAvenue page
         """
         data = self.data
-        frappe.log_error(f"CCAvenue Payment Data: {json.dumps(data)}", "CCAvenue Payment Data")
-
+        
         # Get payment status from data
         if data.get("order_status") == "Success":
             status = "Completed"
@@ -186,8 +185,9 @@ class CCAvenueSettings(Document):
             status = "Failed"
             self.integration_request.update_status(data, "Failed")
 
-        redirect_to = data.get("redirect_to") or None
-        frappe.log_error(f"CCAvenue Redirect To: {redirect_to}", "CCAvenue Payment Redirect")
+        # Priority: 1. CCAvenue Settings redirect_to, 2. Custom redirect from doctype, 3. Data redirect
+        redirect_to = self.redirect_to if hasattr(self, 'redirect_to') and self.redirect_to else None
+
         redirect_message = data.get("redirect_message") or None
 
         if self.flags.status_changed_to == "Completed":
@@ -200,7 +200,7 @@ class CCAvenueSettings(Document):
                 except Exception:
                     frappe.log_error(frappe.get_traceback())
 
-                if custom_redirect_to:
+                if custom_redirect_to and not redirect_to:
                     redirect_to = custom_redirect_to
 
             redirect_url = (
