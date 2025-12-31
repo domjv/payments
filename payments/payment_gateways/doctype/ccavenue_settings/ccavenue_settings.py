@@ -197,22 +197,27 @@ class CCAvenueSettings(Document):
                     # Get the document
                     doc = frappe.get_doc(self.data.reference_doctype, self.data.reference_docname)
                     
-                    # Log the document class to verify override is working
-                    frappe.log_error(
-                        f"Calling on_payment_authorized on {self.data.reference_doctype} {self.data.reference_docname}\n"
-                        f"Document class: {type(doc).__name__}\n"
-                        f"Has method: {hasattr(doc, 'on_payment_authorized')}\n"
-                        f"Payment status: {self.flags.status_changed_to}",
-                        "CCAvenue Payment Authorization - Before Call"
-                    )
+                    # Call the appropriate handler based on doctype
+                    if self.data.reference_doctype == "Sales Invoice":
+                        # Call the handler function directly
+                        from payments.overrides.sales_invoice import handle_payment_authorization_sales_invoice
+                        custom_redirect_to = handle_payment_authorization_sales_invoice(doc, "on_payment_authorized", self.flags.status_changed_to)
+                    elif self.data.reference_doctype == "Payment Request":
+                        from payments.utils.ivyliving_methods import handle_payment_authorization_payment_request
+                        custom_redirect_to = handle_payment_authorization_payment_request(doc, "on_payment_authorized", self.flags.status_changed_to)
+                    elif self.data.reference_doctype == "Customer":
+                        from payments.utils.ivyliving_methods import handle_payment_authorization_customer
+                        custom_redirect_to = handle_payment_authorization_customer(doc, "on_payment_authorized", self.flags.status_changed_to)
+                    else:
+                        # Try run_method for other doctypes
+                        if hasattr(doc, 'on_payment_authorized'):
+                            custom_redirect_to = doc.run_method("on_payment_authorized", self.flags.status_changed_to)
                     
-                    # Call the method
-                    custom_redirect_to = doc.run_method("on_payment_authorized", self.flags.status_changed_to)
-                    
                     frappe.log_error(
-                        f"on_payment_authorized completed for {self.data.reference_doctype} {self.data.reference_docname}\n"
+                        f"Payment authorization completed for {self.data.reference_doctype} {self.data.reference_docname}\n"
+                        f"Handler called successfully\n"
                         f"Returned redirect: {custom_redirect_to}",
-                        "CCAvenue Payment Authorization - After Call"
+                        "CCAvenue Payment Authorization Success"
                     )
                 except Exception as e:
                     frappe.log_error(
