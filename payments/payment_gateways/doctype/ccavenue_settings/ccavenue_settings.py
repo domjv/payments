@@ -197,8 +197,11 @@ class CCAvenueSettings(Document):
                     custom_redirect_to = frappe.get_doc(
                         self.data.reference_doctype, self.data.reference_docname
                     ).run_method("on_payment_authorized", self.flags.status_changed_to)
-                except Exception:
-                    frappe.log_error(frappe.get_traceback())
+                except Exception as e:
+                    frappe.log_error(
+                        f"Error in on_payment_authorized for {self.data.reference_doctype} {self.data.reference_docname}: {str(e)}\n{frappe.get_traceback()}",
+                        "CCAvenue Payment Authorization Error"
+                    )
 
                 if custom_redirect_to and not redirect_to:
                     redirect_to = custom_redirect_to
@@ -636,16 +639,22 @@ def verify_transaction(return_json=False):
         merchant_data = {}
 
         try:
-            # Properly parse the JSON data
+            # Properly parse the JSON data (CCAvenue returns it as plain string)
             if merchant_param_str:
-                parts = merchant_param_str.split(", ")
-                for part in parts:
-                    if ":" in part:
-                        k, v = part.split(":", 1)
-                        merchant_data[k.strip()] = v.strip()
-                    elif " " in part:
-                        k, v = part.split(" ", 1)
-                        merchant_data[k.strip()] = v.strip()
+                # First try JSON parse
+                try:
+                    merchant_data = json.loads(merchant_param_str)
+                except:
+                    # Fallback to string parsing: "key value, key value"
+                    parts = merchant_param_str.split(", ")
+                    for part in parts:
+                        if ":" in part:
+                            k, v = part.split(":", 1)
+                            merchant_data[k.strip()] = v.strip()
+                        elif " " in part:
+                            k, v = part.split(" ", 1)
+                            merchant_data[k.strip()] = v.strip()
+            
             # CRITICAL: Set the session user from merchant_data if available
             user = merchant_data.get("user")
             if user and user != "Guest" and frappe.session.user == "Guest":
@@ -696,6 +705,10 @@ def verify_transaction(return_json=False):
 
         # Save the user in the integration request data for future reference
         data["user"] = user or frappe.session.user
+        
+        # Add parsed merchant data to integration request for on_payment_authorized
+        if merchant_data.get("merchant_name"):
+            data["custom_merchant_name"] = merchant_data.get("merchant_name")
 
         data.update({
             "order_status": response_data.get("order_status"),
@@ -716,7 +729,7 @@ def verify_transaction(return_json=False):
         
         # Use ignore_permissions=True to bypass permission checks
         integration_request.save(ignore_permissions=True)
-
+        frappe.db.commit()  # Commit to ensure data is available for on_payment_authorized
 
         # Set status based on order_status
         if response_data.get("order_status") == "Success":
