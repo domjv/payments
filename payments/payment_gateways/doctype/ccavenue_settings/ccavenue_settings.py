@@ -52,7 +52,7 @@ For CCAvenue payment status is Completed
 
 import json
 import urllib
-from urllib.parse import urlencode, quote_plus
+from urllib.parse import urlencode, quote_plus, urlparse, parse_qs, urlunparse
 import math
 
 import frappe
@@ -185,8 +185,12 @@ class CCAvenueSettings(Document):
             status = "Failed"
             self.integration_request.update_status(data, "Failed")
 
-        # Priority: 1. CCAvenue Settings redirect_to, 2. Custom redirect from doctype, 3. Data redirect
-        redirect_to = self.redirect_to if hasattr(self, 'redirect_to') and self.redirect_to else None
+        # Priority: 1. CCAvenue Settings redirect_to, 2. Custom redirect from doctype
+        redirect_to = None
+        
+        # Check if redirect_to is configured in CCAvenue Settings
+        if hasattr(self, 'redirect_to') and self.redirect_to:
+            redirect_to = self.redirect_to
 
         redirect_message = data.get("redirect_message") or None
 
@@ -212,32 +216,71 @@ class CCAvenueSettings(Document):
                         # Try run_method for other doctypes
                         if hasattr(doc, 'on_payment_authorized'):
                             custom_redirect_to = doc.run_method("on_payment_authorized", self.flags.status_changed_to)
-                    
-                    frappe.log_error(
-                        f"Payment authorization completed for {self.data.reference_doctype} {self.data.reference_docname}\n"
-                        f"Handler called successfully\n"
-                        f"Returned redirect: {custom_redirect_to}",
-                        "CCAvenue Payment Authorization Success"
-                    )
                 except Exception as e:
                     frappe.log_error(
                         f"Error in on_payment_authorized for {self.data.reference_doctype} {self.data.reference_docname}: {str(e)}\n{frappe.get_traceback()}",
                         "CCAvenue Payment Authorization Error"
                     )
 
+                # Only use custom redirect if explicitly returned and no redirect_to already set
                 if custom_redirect_to and not redirect_to:
                     redirect_to = custom_redirect_to
 
-            redirect_url = (
-                f"payment-success?doctype={self.data.reference_doctype}&docname={self.data.reference_docname}"
-            )
+            # If redirect_to is set, redirect to frontend with integration_id only
+            if redirect_to:
+                # Parse the redirect_to URL to append params correctly
+                parsed_url = urlparse(redirect_to)
+                query_params = parse_qs(parsed_url.query)
+                
+                # Add only integration_id - frontend can fetch all details via API
+                payment_params = {
+                    "integration_id": self.integration_request.name
+                }
+                
+                # Merge with existing query params
+                query_params.update({k: [v] for k, v in payment_params.items()})
+                
+                # Reconstruct URL with params
+                new_query = urlencode({k: v[0] for k, v in query_params.items()})
+                redirect_url = urlunparse((
+                    parsed_url.scheme,
+                    parsed_url.netloc,
+                    parsed_url.path,
+                    parsed_url.params,
+                    new_query,
+                    parsed_url.fragment
+                ))
+            else:
+                # Show payment success page without auto-redirect
+                redirect_url = (
+                    f"payment-success?doctype={self.data.reference_doctype}&docname={self.data.reference_docname}"
+                )
         else:
-            redirect_url = "payment-failed"
+            # Failed payment
+            if redirect_to:
+                # Redirect to frontend with integration_id only
+                parsed_url = urlparse(redirect_to)
+                query_params = parse_qs(parsed_url.query)
+                
+                payment_params = {
+                    "integration_id": self.integration_request.name
+                }
+                
+                query_params.update({k: [v] for k, v in payment_params.items()})
+                new_query = urlencode({k: v[0] for k, v in query_params.items()})
+                redirect_url = urlunparse((
+                    parsed_url.scheme,
+                    parsed_url.netloc,
+                    parsed_url.path,
+                    parsed_url.params,
+                    new_query,
+                    parsed_url.fragment
+                ))
+            else:
+                redirect_url = "payment-failed"
 
-        if redirect_to:
-            redirect_url += "&" + urlencode({"redirect_to": redirect_to})
-        if redirect_message:
-            redirect_url += "&" + urlencode({"redirect_message": redirect_message})
+        if redirect_message and not redirect_to:
+            redirect_url += "&" + urlencode({"redirect_message": redirect_message}) if "?" in redirect_url else "?" + urlencode({"redirect_message": redirect_message})
 
         return {"redirect_to": redirect_url, "status": status}
 

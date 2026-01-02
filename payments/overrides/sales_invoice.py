@@ -20,10 +20,6 @@ class CustomSalesInvoice(SalesInvoice):
 		Args:
 			payment_status (str): Payment status from gateway (typically "Completed")
 		"""
-		frappe.log_error(
-			f"CCAvenue Payment Authorization received for Sales Invoice {self.name} with status {payment_status}",
-			"CCAvenue Payment Authorization"
-		)
 		if payment_status == "Completed":
 			# Get the integration request to fetch payment details
 			integration_request = self.get_integration_request()
@@ -87,10 +83,6 @@ class CustomSalesInvoice(SalesInvoice):
 		Returns:
 			Payment Entry document if created, None otherwise
 		"""
-		frappe.log_error(
-			f"Creating Payment Entry for Sales Invoice {self.name} from Integration Request {integration_request.name}",
-			"CCAvenue Payment Entry Creation"
-		)
 		# Parse integration request data
 		data = json.loads(integration_request.data) if integration_request.data else {}
 		
@@ -221,11 +213,6 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 		method: Method name (on_payment_authorized)
 		payment_status: Payment status from gateway
 	"""
-	frappe.log_error(
-		f"Doc event handler called for Sales Invoice {doc.name} with status {payment_status}",
-		"CCAvenue Payment Authorization - Doc Event"
-	)
-	
 	if payment_status == "Completed":
 		# Get the integration request to fetch payment details
 		integration_requests = frappe.get_all(
@@ -343,11 +330,6 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 			# Insert and submit payment entry
 			payment_entry.insert(ignore_permissions=True)
 			payment_entry.submit()
-			
-			frappe.log_error(
-				f"Payment Entry {payment_entry.name} created successfully for Sales Invoice {doc.name}",
-				"CCAvenue Payment Entry Created"
-			)
 			
 			# Reload sales invoice to update outstanding amount
 			doc.reload()
