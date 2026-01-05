@@ -201,6 +201,20 @@ class CCAvenueSettings(Document):
                     # Get the document
                     doc = frappe.get_doc(self.data.reference_doctype, self.data.reference_docname)
                     
+                    # Add comment to track payment source
+                    webhook_source = self.data.get("webhook_source", "redirect")
+                    comment_text = f"""<b>CCAvenue Payment Processed</b><br>
+Source: {webhook_source}<br>
+Status: {self.data.get("order_status", "Success")}<br>
+Tracking ID: {self.data.get("tracking_id", "N/A")}<br>
+Payment Mode: {self.data.get("payment_mode", "N/A")}<br>
+Integration Request: {self.integration_request.name}"""
+                    
+                    try:
+                        doc.add_comment("Info", comment_text)
+                    except Exception as comment_error:
+                        frappe.log_error(f"Failed to add comment: {str(comment_error)}", "CCAvenue Comment Error")
+                    
                     # Call the appropriate handler based on doctype
                     if self.data.reference_doctype == "Sales Invoice":
                         # Call the handler function directly
@@ -576,13 +590,18 @@ def webhook_callback():
         
         try:
             if merchant_param_str:
+                # First try JSON parse
                 merchant_data = json.loads(merchant_param_str)
         except:
-            # Fallback parsing
+            # Fallback: CCAvenue sends space-separated format: "key value, key value"
             if merchant_param_str:
                 parts = merchant_param_str.split(", ")
                 for part in parts:
-                    if ":" in part:
+                    # Split on first space only
+                    if " " in part:
+                        k, v = part.split(" ", 1)
+                        merchant_data[k.strip()] = v.strip()
+                    elif ":" in part:
                         k, v = part.split(":", 1)
                         merchant_data[k.strip()] = v.strip()
         
@@ -843,6 +862,563 @@ def verify_transaction(return_json=False):
             }
         frappe.local.response["type"] = "redirect"
         frappe.local.response["location"] = get_url("payment-failed")
+
+
+@frappe.whitelist(allow_guest=True)
+def order_status_echo():
+    """
+    Order Status Echo URL webhook - Server-to-server backup notification.
+    This webhook acts as a backup to verify_transaction in case the user's browser
+    redirect fails due to network issues or browser being closed.
+    
+    CCAvenue will send the same parameters as verify_transaction to this endpoint.
+    This endpoint only processes payments that haven't been completed yet to prevent
+    duplicate processing.
+    
+    Webhook URL: https://your-domain.com/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.order_status_echo?merchant={merchant_name}
+    """
+    try:
+        # Get the encrypted response from CCAvenue
+        encResp = frappe.request.form.get("encResp")
+        merchant_name = None
+        
+        if frappe.request.query_string.decode("utf-8") != '':
+            merchant_name_encoded = frappe.request.query_string.decode('utf-8').split('=')[1]
+            merchant_name = urllib.parse.unquote(merchant_name_encoded)
+        
+        if not encResp:
+            frappe.log_error("No encrypted response received in order_status_echo", "CCAvenue Echo Webhook")
+            return {"success": False, "error": "No encrypted response"}
+        
+        # Get CCAvenue settings
+        settings = frappe.get_doc("CCAvenue Settings")
+        
+        # Decrypt the response
+        if merchant_name:
+            merchant_doc = frappe.get_doc("CCAvenue Merchant", merchant_name)
+            decrypted_data = decrypt(encResp, merchant_doc.get_password(fieldname="encryption_key", raise_exception=False))
+        else:
+            merchant_doc = settings.get_merchant_for_company()
+            if merchant_doc:
+                decrypted_data = decrypt(encResp, merchant_doc.get_password(fieldname="encryption_key", raise_exception=False))
+            else:
+                decrypted_data = decrypt(encResp, settings.get_password(fieldname="encryption_key", raise_exception=False))
+        
+        # Parse the decrypted data
+        response_data = {}
+        for param in decrypted_data.split('&'):
+            if param and '=' in param:
+                key, value = param.split('=', 1)
+                response_data[key] = value
+        
+        # Extract merchant_param1 and parse the JSON
+        merchant_param_str = response_data.get("merchant_param1", "")
+        merchant_data = {}
+        
+        try:
+            if merchant_param_str:
+                # First try JSON parse
+                merchant_data = json.loads(merchant_param_str)
+        except:
+            # Fallback: CCAvenue sends space-separated format: "key value, key value"
+            if merchant_param_str:
+                parts = merchant_param_str.split(", ")
+                for part in parts:
+                    # Split on first space only
+                    if " " in part:
+                        k, v = part.split(" ", 1)
+                        merchant_data[k.strip()] = v.strip()
+                    elif ":" in part:
+                        k, v = part.split(":", 1)
+                        merchant_data[k.strip()] = v.strip()
+        
+        # Get the integration request - try multiple sources for order_id
+        order_id = merchant_data.get("token") or response_data.get("order_id")
+        if not order_id:
+            # Log for debugging but try to extract from order_id field directly
+            frappe.log_error(
+                f"Parsing Debug:\n"
+                f"Merchant Data: {merchant_data}\n"
+                f"Raw merchant_param1: '{merchant_param_str}'\n"
+                f"Response order_id: {response_data.get('order_id')}\n"
+                f"All Response Keys: {list(response_data.keys())}",
+                "CCAvenue Echo - Order ID Debug"
+            )
+            # Last resort: check if order_id exists in response_data
+            if response_data.get("order_id"):
+                order_id = response_data.get("order_id")
+            else:
+                return {"success": False, "error": "Invalid order ID"}
+        
+        integration_request = frappe.get_doc("Integration Request", order_id.split('@')[1])
+        
+        # CRITICAL: Check if payment was already processed
+        if integration_request.status in ["Completed", "Authorized"]:
+            frappe.logger().info(f"CCAvenue Echo: Payment {integration_request.name} already processed with status {integration_request.status}")
+            return {
+                "success": True,
+                "message": "Payment already processed",
+                "status": integration_request.status,
+                "order_status": response_data.get("order_status")
+            }
+        
+        # Restore user session if available
+        user = merchant_data.get("user")
+        if user and user != "Guest":
+            try:
+                frappe.set_user(user)
+                frappe.local.login_manager.login_as(user)
+            except Exception as e:
+                frappe.log_error(f"Failed to restore user session: {str(e)}", "CCAvenue Echo Webhook")
+        
+        # Update the data with the response from CCAvenue
+        data = json.loads(integration_request.data)
+        data["user"] = user or frappe.session.user
+        
+        if merchant_data.get("merchant_name"):
+            data["custom_merchant_name"] = merchant_data.get("merchant_name")
+        
+        data.update({
+            "order_status": response_data.get("order_status"),
+            "tracking_id": response_data.get("tracking_id"),
+            "bank_ref_no": response_data.get("bank_ref_no"),
+            "payment_mode": response_data.get("payment_mode"),
+            "failure_message": response_data.get("failure_message"),
+            "status_code": response_data.get("status_code"),
+            "status_message": response_data.get("status_message"),
+            "card_name": response_data.get("card_name"),
+            "ccavenue_response": response_data,
+            "webhook_source": "order_status_echo"
+        })
+        
+        # Create controller instance
+        controller = frappe.get_doc("CCAvenue Settings")
+        controller.data = frappe._dict(data)
+        controller.integration_request = integration_request
+        
+        # Update integration request
+        integration_request.data = json.dumps(data)
+        integration_request.save(ignore_permissions=True)
+        frappe.db.commit()
+        
+        # Set status based on order_status
+        if response_data.get("order_status") == "Success":
+            controller.flags.status_changed_to = "Completed"
+        
+        # Call authorize_payment
+        result = controller.authorize_payment()
+        
+        frappe.logger().info(f"CCAvenue Echo: Processed payment {integration_request.name} with status {result.get('status')}")
+        
+        # Send email notification
+        try:
+            frappe.sendmail(
+                recipients=["dominic.v@pleasantbiz.com"],
+                subject=f"CCAvenue Webhook: Order Status Echo - {data.get('order_status')}",
+                message=f"""<h3>CCAvenue Order Status Echo Webhook Triggered</h3>
+                <p><strong>Webhook Type:</strong> Order Status Echo (Backup Notification)</p>
+                <p><strong>Integration Request:</strong> {integration_request.name}</p>
+                <p><strong>Order Status:</strong> {data.get('order_status')}</p>
+                <p><strong>Tracking ID:</strong> {data.get('tracking_id', 'N/A')}</p>
+                <p><strong>Payment Mode:</strong> {data.get('payment_mode', 'N/A')}</p>
+                <p><strong>Bank Ref No:</strong> {data.get('bank_ref_no', 'N/A')}</p>
+                <p><strong>Status Code:</strong> {data.get('status_code', 'N/A')}</p>
+                <p><strong>Card Name:</strong> {data.get('card_name', 'N/A')}</p>
+                <p><strong>Reference Document:</strong> {data.get('reference_doctype')} - {data.get('reference_docname')}</p>
+                <p><strong>Processing Result:</strong> {result.get('status')}</p>
+                <p><strong>User:</strong> {data.get('user', 'N/A')}</p>
+                <hr>
+                <p><em>This webhook was triggered as a backup server-to-server notification from CCAvenue.</em></p>
+                """,
+                now=True
+            )
+        except Exception as email_error:
+            frappe.log_error(f"Failed to send webhook email: {str(email_error)}", "CCAvenue Email Error")
+        
+        return {
+            "success": True,
+            "status": result.get("status"),
+            "tracking_id": data.get("tracking_id"),
+            "order_status": data.get("order_status"),
+            "integration_request": integration_request.name
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"{str(e)}\n{frappe.get_traceback()}", "CCAvenue Echo Webhook Error")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist(allow_guest=True)
+def reconciliation_status():
+    """
+    Order Reconciliation Status webhook - Handles delayed status updates.
+    This webhook is called when transaction status is updated during reconciliation
+    (e.g., pending payments that later succeed or fail).
+    
+    Critical for handling:
+    - Delayed payment confirmations (UPI, wallets, net banking)
+    - Manual reconciliation by CCAvenue team
+    - Status changes from pending to success/failure
+    
+    Webhook URL: https://your-domain.com/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.reconciliation_status?merchant={merchant_name}
+    """
+    try:
+        # Get the encrypted response from CCAvenue
+        encResp = frappe.request.form.get("encResp")
+        merchant_name = None
+        
+        if frappe.request.query_string.decode("utf-8") != '':
+            merchant_name_encoded = frappe.request.query_string.decode('utf-8').split('=')[1]
+            merchant_name = urllib.parse.unquote(merchant_name_encoded)
+        
+        if not encResp:
+            frappe.log_error("No encrypted response received in reconciliation_status", "CCAvenue Reconciliation Webhook")
+            return {"success": False, "error": "No encrypted response"}
+        
+        # Get CCAvenue settings
+        settings = frappe.get_doc("CCAvenue Settings")
+        
+        # Decrypt the response
+        if merchant_name:
+            merchant_doc = frappe.get_doc("CCAvenue Merchant", merchant_name)
+            decrypted_data = decrypt(encResp, merchant_doc.get_password(fieldname="encryption_key", raise_exception=False))
+        else:
+            merchant_doc = settings.get_merchant_for_company()
+            if merchant_doc:
+                decrypted_data = decrypt(encResp, merchant_doc.get_password(fieldname="encryption_key", raise_exception=False))
+            else:
+                decrypted_data = decrypt(encResp, settings.get_password(fieldname="encryption_key", raise_exception=False))
+        
+        # Parse the decrypted data
+        response_data = {}
+        for param in decrypted_data.split('&'):
+            if param and '=' in param:
+                key, value = param.split('=', 1)
+                response_data[key] = value
+        
+        # Extract merchant_param1 and parse the JSON
+        merchant_param_str = response_data.get("merchant_param1", "")
+        merchant_data = {}
+        
+        try:
+            if merchant_param_str:
+                # First try JSON parse
+                merchant_data = json.loads(merchant_param_str)
+        except:
+            # Fallback: CCAvenue sends space-separated format: "key value, key value"
+            if merchant_param_str:
+                parts = merchant_param_str.split(", ")
+                for part in parts:
+                    # Split on first space only
+                    if " " in part:
+                        k, v = part.split(" ", 1)
+                        merchant_data[k.strip()] = v.strip()
+                    elif ":" in part:
+                        k, v = part.split(":", 1)
+                        merchant_data[k.strip()] = v.strip()
+        
+        # Get the integration request using order_id
+        order_id = merchant_data.get("token") or response_data.get("order_id")
+        if not order_id:
+            frappe.log_error(f"No order_id found. Response data: {response_data}", "CCAvenue Reconciliation Webhook")
+            return {"success": False, "error": "Invalid order ID"}
+        
+        # Extract integration request name from order_id
+        if "@" in order_id:
+            integration_request_name = order_id.split('@')[1]
+        else:
+            integration_request_name = order_id
+        
+        integration_request = frappe.get_doc("Integration Request", integration_request_name)
+        
+        # Get current status
+        previous_status = integration_request.status
+        new_order_status = response_data.get("order_status")
+        
+        # Restore user session if available
+        user = merchant_data.get("user")
+        if user and user != "Guest":
+            try:
+                frappe.set_user(user)
+                frappe.local.login_manager.login_as(user)
+            except Exception as e:
+                frappe.log_error(f"Failed to restore user session: {str(e)}", "CCAvenue Reconciliation Webhook")
+        
+        # Update the data with the reconciliation response
+        data = json.loads(integration_request.data)
+        data["user"] = user or data.get("user") or frappe.session.user
+        
+        if merchant_data.get("merchant_name"):
+            data["custom_merchant_name"] = merchant_data.get("merchant_name")
+        
+        # Store reconciliation information
+        data.update({
+            "order_status": new_order_status,
+            "tracking_id": response_data.get("tracking_id"),
+            "bank_ref_no": response_data.get("bank_ref_no"),
+            "payment_mode": response_data.get("payment_mode"),
+            "failure_message": response_data.get("failure_message"),
+            "status_code": response_data.get("status_code"),
+            "status_message": response_data.get("status_message"),
+            "card_name": response_data.get("card_name"),
+            "ccavenue_response": response_data,
+            "webhook_source": "reconciliation_status",
+            "previous_status": previous_status,
+            "reconciliation_time": frappe.utils.now()
+        })
+        
+        # Create controller instance
+        controller = frappe.get_doc("CCAvenue Settings")
+        controller.data = frappe._dict(data)
+        controller.integration_request = integration_request
+        
+        # Update integration request
+        integration_request.data = json.dumps(data)
+        integration_request.save(ignore_permissions=True)
+        frappe.db.commit()
+        
+        # Set status based on order_status
+        if new_order_status == "Success":
+            controller.flags.status_changed_to = "Completed"
+        elif new_order_status in ["Failure", "Aborted", "Invalid"]:
+            controller.flags.status_changed_to = "Failed"
+        
+        # Call authorize_payment to update related documents
+        result = controller.authorize_payment()
+        
+        # Log the reconciliation
+        frappe.logger().info(
+            f"CCAvenue Reconciliation: Payment {integration_request.name} status changed from "
+            f"{previous_status} to {result.get('status')} (Order Status: {new_order_status})"
+        )
+        
+        # Create an error log for visibility
+        frappe.log_error(
+            f"Payment Reconciliation\n"
+            f"Integration Request: {integration_request.name}\n"
+            f"Previous Status: {previous_status}\n"
+            f"New Status: {result.get('status')}\n"
+            f"Order Status: {new_order_status}\n"
+            f"Tracking ID: {data.get('tracking_id')}\n"
+            f"Reference: {data.get('reference_doctype')} - {data.get('reference_docname')}",
+            "CCAvenue Payment Reconciliation"
+        )
+        
+        # Send email notification
+        try:
+            frappe.sendmail(
+                recipients=["dominic.v@pleasantbiz.com"],
+                subject=f"CCAvenue Webhook: Reconciliation - {previous_status} → {new_order_status}",
+                message=f"""<h3>CCAvenue Reconciliation Webhook Triggered</h3>
+                <p><strong>Webhook Type:</strong> Order Reconciliation Status</p>
+                <p><strong>Integration Request:</strong> {integration_request.name}</p>
+                <p><strong>Status Change:</strong> {previous_status} → {result.get('status')}</p>
+                <p><strong>Order Status:</strong> {new_order_status}</p>
+                <p><strong>Tracking ID:</strong> {data.get('tracking_id', 'N/A')}</p>
+                <p><strong>Payment Mode:</strong> {data.get('payment_mode', 'N/A')}</p>
+                <p><strong>Bank Ref No:</strong> {data.get('bank_ref_no', 'N/A')}</p>
+                <p><strong>Status Code:</strong> {data.get('status_code', 'N/A')}</p>
+                <p><strong>Card Name:</strong> {data.get('card_name', 'N/A')}</p>
+                <p><strong>Failure Message:</strong> {data.get('failure_message', 'N/A')}</p>
+                <p><strong>Reference Document:</strong> {data.get('reference_doctype')} - {data.get('reference_docname')}</p>
+                <p><strong>Reconciliation Time:</strong> {data.get('reconciliation_time')}</p>
+                <p><strong>User:</strong> {data.get('user', 'N/A')}</p>
+                <hr>
+                <p><em>This webhook was triggered by CCAvenue reconciliation process for a delayed payment status update.</em></p>
+                """,
+                now=True
+            )
+        except Exception as email_error:
+            frappe.log_error(f"Failed to send webhook email: {str(email_error)}", "CCAvenue Email Error")
+        
+        return {
+            "success": True,
+            "previous_status": previous_status,
+            "new_status": result.get("status"),
+            "order_status": new_order_status,
+            "tracking_id": data.get("tracking_id"),
+            "integration_request": integration_request.name
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"{str(e)}\n{frappe.get_traceback()}", "CCAvenue Reconciliation Webhook Error")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist(allow_guest=True)
+def refund_status():
+    """
+    Instant Refund Status webhook - Handles real-time refund status updates.
+    This webhook is called whenever CCAvenue gets a response from their refund API
+    (typically M2P API for instant refunds).
+    
+    Critical for:
+    - Tracking refund processing status
+    - Updating refund records in real-time
+    - Notifying customers about refund completion
+    
+    Webhook URL: https://your-domain.com/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.refund_status?merchant={merchant_name}
+    
+    Response Parameters Expected:
+    - order_id: Original order ID
+    - refund_id: Unique refund reference
+    - refund_status: Status of refund (Success, Failed, Pending)
+    - refund_amount: Amount refunded
+    - tracking_id: Original payment tracking ID
+    """
+    try:
+        # Get the encrypted response from CCAvenue
+        encResp = frappe.request.form.get("encResp")
+        merchant_name = None
+        
+        if frappe.request.query_string.decode("utf-8") != '':
+            merchant_name_encoded = frappe.request.query_string.decode('utf-8').split('=')[1]
+            merchant_name = urllib.parse.unquote(merchant_name_encoded)
+        
+        if not encResp:
+            frappe.log_error("No encrypted response received in refund_status", "CCAvenue Refund Webhook")
+            return {"success": False, "error": "No encrypted response"}
+        
+        # Get CCAvenue settings
+        settings = frappe.get_doc("CCAvenue Settings")
+        
+        # Decrypt the response
+        if merchant_name:
+            merchant_doc = frappe.get_doc("CCAvenue Merchant", merchant_name)
+            decrypted_data = decrypt(encResp, merchant_doc.get_password(fieldname="encryption_key", raise_exception=False))
+        else:
+            merchant_doc = settings.get_merchant_for_company()
+            if merchant_doc:
+                decrypted_data = decrypt(encResp, merchant_doc.get_password(fieldname="encryption_key", raise_exception=False))
+            else:
+                decrypted_data = decrypt(encResp, settings.get_password(fieldname="encryption_key", raise_exception=False))
+        
+        # Parse the decrypted data
+        response_data = {}
+        for param in decrypted_data.split('&'):
+            if param and '=' in param:
+                key, value = param.split('=', 1)
+                response_data[key] = value
+        
+        # Extract refund information
+        order_id = response_data.get("order_id")
+        refund_id = response_data.get("refund_id")
+        refund_status = response_data.get("refund_status")
+        refund_amount = response_data.get("refund_amount")
+        tracking_id = response_data.get("tracking_id")
+        
+        if not order_id:
+            frappe.log_error(f"No order_id in refund webhook. Response: {response_data}", "CCAvenue Refund Webhook")
+            return {"success": False, "error": "Invalid order ID"}
+        
+        # Extract integration request name from order_id
+        if "@" in order_id:
+            integration_request_name = order_id.split('@')[1]
+        else:
+            integration_request_name = order_id
+        
+        # Find the integration request
+        try:
+            integration_request = frappe.get_doc("Integration Request", integration_request_name)
+        except frappe.DoesNotExistError:
+            frappe.log_error(
+                f"Integration request {integration_request_name} not found for refund. Order ID: {order_id}",
+                "CCAvenue Refund Webhook"
+            )
+            return {"success": False, "error": "Integration request not found"}
+        
+        # Update the integration request with refund information
+        data = json.loads(integration_request.data)
+        
+        # Store refund information
+        if "refunds" not in data:
+            data["refunds"] = []
+        
+        refund_info = {
+            "refund_id": refund_id,
+            "refund_status": refund_status,
+            "refund_amount": refund_amount,
+            "tracking_id": tracking_id,
+            "refund_time": frappe.utils.now(),
+            "refund_response": response_data
+        }
+        
+        data["refunds"].append(refund_info)
+        data["latest_refund_status"] = refund_status
+        
+        # Update integration request
+        integration_request.data = json.dumps(data)
+        integration_request.save(ignore_permissions=True)
+        frappe.db.commit()
+        
+        # Log the refund
+        frappe.logger().info(
+            f"CCAvenue Refund: Order {order_id}, Refund ID {refund_id}, "
+            f"Status: {refund_status}, Amount: {refund_amount}"
+        )
+        
+        # Create an error log for visibility
+        frappe.log_error(
+            f"Refund Status Update\n"
+            f"Integration Request: {integration_request.name}\n"
+            f"Order ID: {order_id}\n"
+            f"Refund ID: {refund_id}\n"
+            f"Refund Status: {refund_status}\n"
+            f"Refund Amount: {refund_amount}\n"
+            f"Tracking ID: {tracking_id}\n"
+            f"Reference: {data.get('reference_doctype')} - {data.get('reference_docname')}",
+            "CCAvenue Refund Status"
+        )
+        
+        # Call custom refund handler if it exists in the reference doctype
+        try:
+            if data.get("reference_doctype") and data.get("reference_docname"):
+                doc = frappe.get_doc(data["reference_doctype"], data["reference_docname"])
+                if hasattr(doc, 'on_refund_status_update'):
+                    doc.run_method("on_refund_status_update", refund_info)
+        except Exception as e:
+            frappe.log_error(
+                f"Error calling on_refund_status_update: {str(e)}\n{frappe.get_traceback()}",
+                "CCAvenue Refund Handler Error"
+            )
+        
+        # Send email notification
+        try:
+            frappe.sendmail(
+                recipients=["dominic.v@pleasantbiz.com"],
+                subject=f"CCAvenue Webhook: Refund {refund_status} - ₹{refund_amount}",
+                message=f"""<h3>CCAvenue Refund Status Webhook Triggered</h3>
+                <p><strong>Webhook Type:</strong> Instant Refund Status</p>
+                <p><strong>Integration Request:</strong> {integration_request.name}</p>
+                <p><strong>Order ID:</strong> {order_id}</p>
+                <p><strong>Refund ID:</strong> {refund_id}</p>
+                <p><strong>Refund Status:</strong> {refund_status}</p>
+                <p><strong>Refund Amount:</strong> ₹{refund_amount}</p>
+                <p><strong>Tracking ID:</strong> {tracking_id}</p>
+                <p><strong>Refund Time:</strong> {refund_info.get('refund_time')}</p>
+                <p><strong>Reference Document:</strong> {data.get('reference_doctype')} - {data.get('reference_docname')}</p>
+                <p><strong>Total Refunds:</strong> {len(data.get('refunds', []))}</p>
+                <hr>
+                <p><em>This webhook was triggered by CCAvenue refund API (M2P) with instant refund status update.</em></p>
+                """,
+                now=True
+            )
+        except Exception as email_error:
+            frappe.log_error(f"Failed to send webhook email: {str(email_error)}", "CCAvenue Email Error")
+        
+        return {
+            "success": True,
+            "order_id": order_id,
+            "refund_id": refund_id,
+            "refund_status": refund_status,
+            "refund_amount": refund_amount,
+            "tracking_id": tracking_id,
+            "integration_request": integration_request.name
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"{str(e)}\n{frappe.get_traceback()}", "CCAvenue Refund Webhook Error")
+        return {"success": False, "error": str(e)}
 
 
 @frappe.whitelist(allow_guest=True)
