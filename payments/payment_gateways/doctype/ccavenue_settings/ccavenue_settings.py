@@ -932,16 +932,23 @@ def order_status_echo():
                         k, v = part.split(":", 1)
                         merchant_data[k.strip()] = v.strip()
         
-        # Get the integration request
-        order_id = merchant_data.get("token")
+        # Get the integration request - try multiple sources for order_id
+        order_id = merchant_data.get("token") or response_data.get("order_id")
         if not order_id:
+            # Log for debugging but try to extract from order_id field directly
             frappe.log_error(
-                f"No order_id found in merchant_param1\n"
+                f"Parsing Debug:\n"
                 f"Merchant Data: {merchant_data}\n"
-                f"Raw merchant_param1: {merchant_param_str}",
-                "CCAvenue Echo - Missing Order ID"
+                f"Raw merchant_param1: '{merchant_param_str}'\n"
+                f"Response order_id: {response_data.get('order_id')}\n"
+                f"All Response Keys: {list(response_data.keys())}",
+                "CCAvenue Echo - Order ID Debug"
             )
-            return {"success": False, "error": "Invalid order ID"}
+            # Last resort: check if order_id exists in response_data
+            if response_data.get("order_id"):
+                order_id = response_data.get("order_id")
+            else:
+                return {"success": False, "error": "Invalid order ID"}
         
         integration_request = frappe.get_doc("Integration Request", order_id.split('@')[1])
         
