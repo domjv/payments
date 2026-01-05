@@ -201,6 +201,20 @@ class CCAvenueSettings(Document):
                     # Get the document
                     doc = frappe.get_doc(self.data.reference_doctype, self.data.reference_docname)
                     
+                    # Add comment to track payment source
+                    webhook_source = self.data.get("webhook_source", "redirect")
+                    comment_text = f"""<b>CCAvenue Payment Processed</b><br>
+Source: {webhook_source}<br>
+Status: {self.data.get("order_status", "Success")}<br>
+Tracking ID: {self.data.get("tracking_id", "N/A")}<br>
+Payment Mode: {self.data.get("payment_mode", "N/A")}<br>
+Integration Request: {self.integration_request.name}"""
+                    
+                    try:
+                        doc.add_comment("Info", comment_text)
+                    except Exception as comment_error:
+                        frappe.log_error(f"Failed to add comment: {str(comment_error)}", "CCAvenue Comment Error")
+                    
                     # Call the appropriate handler based on doctype
                     if self.data.reference_doctype == "Sales Invoice":
                         # Call the handler function directly
@@ -989,6 +1003,31 @@ def order_status_echo():
         
         frappe.logger().info(f"CCAvenue Echo: Processed payment {integration_request.name} with status {result.get('status')}")
         
+        # Send email notification
+        try:
+            frappe.sendmail(
+                recipients=["dominic.v@pleasantbiz.com"],
+                subject=f"CCAvenue Webhook: Order Status Echo - {data.get('order_status')}",
+                message=f"""<h3>CCAvenue Order Status Echo Webhook Triggered</h3>
+                <p><strong>Webhook Type:</strong> Order Status Echo (Backup Notification)</p>
+                <p><strong>Integration Request:</strong> {integration_request.name}</p>
+                <p><strong>Order Status:</strong> {data.get('order_status')}</p>
+                <p><strong>Tracking ID:</strong> {data.get('tracking_id', 'N/A')}</p>
+                <p><strong>Payment Mode:</strong> {data.get('payment_mode', 'N/A')}</p>
+                <p><strong>Bank Ref No:</strong> {data.get('bank_ref_no', 'N/A')}</p>
+                <p><strong>Status Code:</strong> {data.get('status_code', 'N/A')}</p>
+                <p><strong>Card Name:</strong> {data.get('card_name', 'N/A')}</p>
+                <p><strong>Reference Document:</strong> {data.get('reference_doctype')} - {data.get('reference_docname')}</p>
+                <p><strong>Processing Result:</strong> {result.get('status')}</p>
+                <p><strong>User:</strong> {data.get('user', 'N/A')}</p>
+                <hr>
+                <p><em>This webhook was triggered as a backup server-to-server notification from CCAvenue.</em></p>
+                """,
+                now=True
+            )
+        except Exception as email_error:
+            frappe.log_error(f"Failed to send webhook email: {str(email_error)}", "CCAvenue Email Error")
+        
         return {
             "success": True,
             "status": result.get("status"),
@@ -1158,6 +1197,33 @@ def reconciliation_status():
             "CCAvenue Payment Reconciliation"
         )
         
+        # Send email notification
+        try:
+            frappe.sendmail(
+                recipients=["dominic.v@pleasantbiz.com"],
+                subject=f"CCAvenue Webhook: Reconciliation - {previous_status} → {new_order_status}",
+                message=f"""<h3>CCAvenue Reconciliation Webhook Triggered</h3>
+                <p><strong>Webhook Type:</strong> Order Reconciliation Status</p>
+                <p><strong>Integration Request:</strong> {integration_request.name}</p>
+                <p><strong>Status Change:</strong> {previous_status} → {result.get('status')}</p>
+                <p><strong>Order Status:</strong> {new_order_status}</p>
+                <p><strong>Tracking ID:</strong> {data.get('tracking_id', 'N/A')}</p>
+                <p><strong>Payment Mode:</strong> {data.get('payment_mode', 'N/A')}</p>
+                <p><strong>Bank Ref No:</strong> {data.get('bank_ref_no', 'N/A')}</p>
+                <p><strong>Status Code:</strong> {data.get('status_code', 'N/A')}</p>
+                <p><strong>Card Name:</strong> {data.get('card_name', 'N/A')}</p>
+                <p><strong>Failure Message:</strong> {data.get('failure_message', 'N/A')}</p>
+                <p><strong>Reference Document:</strong> {data.get('reference_doctype')} - {data.get('reference_docname')}</p>
+                <p><strong>Reconciliation Time:</strong> {data.get('reconciliation_time')}</p>
+                <p><strong>User:</strong> {data.get('user', 'N/A')}</p>
+                <hr>
+                <p><em>This webhook was triggered by CCAvenue reconciliation process for a delayed payment status update.</em></p>
+                """,
+                now=True
+            )
+        except Exception as email_error:
+            frappe.log_error(f"Failed to send webhook email: {str(email_error)}", "CCAvenue Email Error")
+        
         return {
             "success": True,
             "previous_status": previous_status,
@@ -1308,6 +1374,30 @@ def refund_status():
                 f"Error calling on_refund_status_update: {str(e)}\n{frappe.get_traceback()}",
                 "CCAvenue Refund Handler Error"
             )
+        
+        # Send email notification
+        try:
+            frappe.sendmail(
+                recipients=["dominic.v@pleasantbiz.com"],
+                subject=f"CCAvenue Webhook: Refund {refund_status} - ₹{refund_amount}",
+                message=f"""<h3>CCAvenue Refund Status Webhook Triggered</h3>
+                <p><strong>Webhook Type:</strong> Instant Refund Status</p>
+                <p><strong>Integration Request:</strong> {integration_request.name}</p>
+                <p><strong>Order ID:</strong> {order_id}</p>
+                <p><strong>Refund ID:</strong> {refund_id}</p>
+                <p><strong>Refund Status:</strong> {refund_status}</p>
+                <p><strong>Refund Amount:</strong> ₹{refund_amount}</p>
+                <p><strong>Tracking ID:</strong> {tracking_id}</p>
+                <p><strong>Refund Time:</strong> {refund_info.get('refund_time')}</p>
+                <p><strong>Reference Document:</strong> {data.get('reference_doctype')} - {data.get('reference_docname')}</p>
+                <p><strong>Total Refunds:</strong> {len(data.get('refunds', []))}</p>
+                <hr>
+                <p><em>This webhook was triggered by CCAvenue refund API (M2P) with instant refund status update.</em></p>
+                """,
+                now=True
+            )
+        except Exception as email_error:
+            frappe.log_error(f"Failed to send webhook email: {str(email_error)}", "CCAvenue Email Error")
         
         return {
             "success": True,
