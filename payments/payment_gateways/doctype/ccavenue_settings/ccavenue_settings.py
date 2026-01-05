@@ -576,13 +576,18 @@ def webhook_callback():
         
         try:
             if merchant_param_str:
+                # First try JSON parse
                 merchant_data = json.loads(merchant_param_str)
         except:
-            # Fallback parsing
+            # Fallback: CCAvenue sends space-separated format: "key value, key value"
             if merchant_param_str:
                 parts = merchant_param_str.split(", ")
                 for part in parts:
-                    if ":" in part:
+                    # Split on first space only
+                    if " " in part:
+                        k, v = part.split(" ", 1)
+                        merchant_data[k.strip()] = v.strip()
+                    elif ":" in part:
                         k, v = part.split(":", 1)
                         merchant_data[k.strip()] = v.strip()
         
@@ -898,19 +903,30 @@ def order_status_echo():
         
         try:
             if merchant_param_str:
+                # First try JSON parse
                 merchant_data = json.loads(merchant_param_str)
         except:
+            # Fallback: CCAvenue sends space-separated format: "key value, key value"
             if merchant_param_str:
                 parts = merchant_param_str.split(", ")
                 for part in parts:
-                    if ":" in part:
+                    # Split on first space only
+                    if " " in part:
+                        k, v = part.split(" ", 1)
+                        merchant_data[k.strip()] = v.strip()
+                    elif ":" in part:
                         k, v = part.split(":", 1)
                         merchant_data[k.strip()] = v.strip()
         
         # Get the integration request
         order_id = merchant_data.get("token")
         if not order_id:
-            frappe.log_error(f"No order_id found in merchant_param1: {merchant_param_str}", "CCAvenue Echo Webhook")
+            frappe.log_error(
+                f"No order_id found in merchant_param1\n"
+                f"Merchant Data: {merchant_data}\n"
+                f"Raw merchant_param1: {merchant_param_str}",
+                "CCAvenue Echo - Missing Order ID"
+            )
             return {"success": False, "error": "Invalid order ID"}
         
         integration_request = frappe.get_doc("Integration Request", order_id.split('@')[1])
@@ -1040,12 +1056,18 @@ def reconciliation_status():
         
         try:
             if merchant_param_str:
+                # First try JSON parse
                 merchant_data = json.loads(merchant_param_str)
         except:
+            # Fallback: CCAvenue sends space-separated format: "key value, key value"
             if merchant_param_str:
                 parts = merchant_param_str.split(", ")
                 for part in parts:
-                    if ":" in part:
+                    # Split on first space only
+                    if " " in part:
+                        k, v = part.split(" ", 1)
+                        merchant_data[k.strip()] = v.strip()
+                    elif ":" in part:
                         k, v = part.split(":", 1)
                         merchant_data[k.strip()] = v.strip()
         
