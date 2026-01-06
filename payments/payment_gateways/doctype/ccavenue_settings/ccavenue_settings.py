@@ -624,7 +624,8 @@ def webhook_callback():
             "bank_ref_no": response_data.get("bank_ref_no"),
             "payment_mode": response_data.get("payment_mode"),
             "failure_message": response_data.get("failure_message"),
-            "ccavenue_response": response_data
+            "ccavenue_response": response_data,
+            "webhook_source": "webhook_callback"  # Mark source for duplicate prevention tracking
         })
         
         # Create controller instance
@@ -1033,7 +1034,7 @@ def order_status_echo():
                 now=True
             )
         except Exception as email_error:
-            frappe.log_error(f"Failed to send webhook email: {str(email_error)}", "CCAvenue Email Error")
+            frappe.log_error(str(email_error), "CCAvenue Email Error")
         
         return {
             "success": True,
@@ -1229,7 +1230,7 @@ def reconciliation_status():
                 now=True
             )
         except Exception as email_error:
-            frappe.log_error(f"Failed to send webhook email: {str(email_error)}", "CCAvenue Email Error")
+            frappe.log_error(str(email_error), "CCAvenue Email Error")
         
         return {
             "success": True,
@@ -1404,7 +1405,7 @@ def refund_status():
                 now=True
             )
         except Exception as email_error:
-            frappe.log_error(f"Failed to send webhook email: {str(email_error)}", "CCAvenue Email Error")
+            frappe.log_error(str(email_error), "CCAvenue Email Error")
         
         return {
             "success": True,

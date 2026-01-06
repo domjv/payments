@@ -31,9 +31,52 @@ class CustomSalesInvoice(SalesInvoice):
 				)
 				return
 			
+			# Parse integration request data to get payment amount
+			data = json.loads(integration_request.data) if integration_request.data else {}
+			payment_amount = data.get("amount", 0)
+			
+			# DUPLICATE PREVENTION CHECKS
+			# Reload the document to get latest outstanding amount
+			self.reload()
+			
+			# Check 1: If invoice is fully paid, do not create payment entry
+			if self.outstanding_amount <= 0:
+				frappe.log_error(
+					f"Sales Invoice {self.name} is already fully paid (outstanding: {self.outstanding_amount}). Skipping payment entry creation for Integration Request {integration_request.name}",
+					"CCAvenue Duplicate Payment Prevention"
+				)
+				return
+			
+			# Check 2: Verify if payment entry already exists for this integration request
+			tracking_id = data.get("tracking_id", "")
+			existing_payment = frappe.db.exists(
+				"Payment Entry",
+				{
+					"reference_no": tracking_id or integration_request.name,
+					"party": self.customer,
+					"docstatus": ["in", [0, 1]]  # Draft or Submitted
+				}
+			)
+			
+			if existing_payment:
+				frappe.log_error(
+					f"Payment Entry already exists for Integration Request {integration_request.name} (Tracking ID: {tracking_id}). Skipping duplicate creation for Sales Invoice {self.name}",
+					"CCAvenue Duplicate Payment Prevention"
+				)
+				return
+			
+			# Check 3: Validate payment amount against outstanding
+			# If payment amount exceeds outstanding, adjust it to outstanding amount
+			if payment_amount > self.outstanding_amount:
+				frappe.log_error(
+					f"Payment amount ({payment_amount}) exceeds outstanding amount ({self.outstanding_amount}) for Sales Invoice {self.name}. Adjusting to outstanding amount.",
+					"CCAvenue Payment Amount Adjustment"
+				)
+				payment_amount = self.outstanding_amount
+			
 			# Create payment entry
 			try:
-				payment_entry = self.create_payment_entry_from_ccavenue(integration_request)
+				payment_entry = self.create_payment_entry_from_ccavenue(integration_request, payment_amount)
 				
 				if payment_entry:
 					frappe.msgprint(
@@ -73,12 +116,13 @@ class CustomSalesInvoice(SalesInvoice):
 		
 		return None
 	
-	def create_payment_entry_from_ccavenue(self, integration_request):
+	def create_payment_entry_from_ccavenue(self, integration_request, payment_amount):
 		"""
 		Create Payment Entry from CCAvenue Integration Request.
 		
 		Args:
 			integration_request: Integration Request document
+			payment_amount: Validated payment amount (already checked against outstanding)
 			
 		Returns:
 			Payment Entry document if created, None otherwise
@@ -161,8 +205,8 @@ class CustomSalesInvoice(SalesInvoice):
 				else:
 					frappe.throw(_("No bank account found for company {0}").format(self.company))
 		
-		# Calculate payment amount (should match the amount paid including charges)
-		payment_amount = data.get("amount", self.outstanding_amount)
+		# Use the validated payment_amount and calculate allocated amount
+		allocated_amount = min(payment_amount, self.outstanding_amount)
 		
 		# Create Payment Entry
 		payment_entry = frappe.get_doc({
@@ -181,14 +225,14 @@ class CustomSalesInvoice(SalesInvoice):
 			"received_amount": payment_amount,
 			"reference_no": tracking_id or integration_request.name,
 			"reference_date": frappe.utils.nowdate(),
-			"remarks": f"Payment received via CCAvenue for {self.name}. Tracking ID: {tracking_id}. Bank Ref: {bank_ref_no}",
+			"remarks": f"Payment received via CCAvenue for {self.name}. Tracking ID: {tracking_id}. Bank Ref: {bank_ref_no}. Integration Request: {integration_request.name}",
 			"references": [
 				{
 					"reference_doctype": "Sales Invoice",
 					"reference_name": self.name,
 					"total_amount": self.grand_total,
 					"outstanding_amount": self.outstanding_amount,
-					"allocated_amount": min(payment_amount, self.outstanding_amount)
+					"allocated_amount": allocated_amount
 				}
 			]
 		})
@@ -236,11 +280,50 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 		
 		integration_request = frappe.get_doc("Integration Request", integration_requests[0].name)
 		
+		# Parse integration request data to get payment amount
+		data = json.loads(integration_request.data) if integration_request.data else {}
+		payment_amount = data.get("amount", 0)
+		
+		# DUPLICATE PREVENTION CHECKS
+		# Reload the document to get latest outstanding amount
+		doc.reload()
+		
+		# Check 1: If invoice is fully paid, do not create payment entry
+		if doc.outstanding_amount <= 0:
+			frappe.log_error(
+				f"Sales Invoice {doc.name} is already fully paid (outstanding: {doc.outstanding_amount}). Skipping payment entry creation for Integration Request {integration_request.name}",
+				"CCAvenue Duplicate Payment Prevention"
+			)
+			return
+		
+		# Check 2: Verify if payment entry already exists for this integration request
+		existing_payment = frappe.db.exists(
+			"Payment Entry",
+			{
+				"reference_no": data.get("tracking_id", integration_request.name),
+				"party": doc.customer,
+				"docstatus": ["in", [0, 1]]  # Draft or Submitted
+			}
+		)
+		
+		if existing_payment:
+			frappe.log_error(
+				f"Payment Entry already exists for Integration Request {integration_request.name} (Tracking ID: {data.get('tracking_id')}). Skipping duplicate creation for Sales Invoice {doc.name}",
+				"CCAvenue Duplicate Payment Prevention"
+			)
+			return
+		
+		# Check 3: Validate payment amount against outstanding
+		# If payment amount exceeds outstanding, adjust it to outstanding amount
+		if payment_amount > doc.outstanding_amount:
+			frappe.log_error(
+				f"Payment amount ({payment_amount}) exceeds outstanding amount ({doc.outstanding_amount}) for Sales Invoice {doc.name}. Adjusting to outstanding amount.",
+				"CCAvenue Payment Amount Adjustment"
+			)
+			payment_amount = doc.outstanding_amount
+		
 		# Create payment entry
 		try:
-			# Parse integration request data
-			data = json.loads(integration_request.data) if integration_request.data else {}
-			
 			# Get tracking ID and other payment details
 			tracking_id = data.get("tracking_id", "")
 			payment_mode_name = "CCAvenue"
@@ -295,8 +378,8 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 					else:
 						frappe.throw(_("No bank account found for company {0}").format(doc.company))
 			
-			# Calculate payment amount (should match the amount paid including charges)
-			payment_amount = data.get("amount", doc.outstanding_amount)
+			# Use the validated payment_amount from duplicate prevention checks
+			allocated_amount = min(payment_amount, doc.outstanding_amount)
 			
 			# Create Payment Entry
 			payment_entry = frappe.get_doc({
@@ -315,14 +398,14 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 				"received_amount": payment_amount,
 				"reference_no": tracking_id or integration_request.name,
 				"reference_date": frappe.utils.nowdate(),
-				"remarks": f"Payment received via CCAvenue for {doc.name}. Tracking ID: {tracking_id}. Bank Ref: {bank_ref_no}",
+				"remarks": f"Payment received via CCAvenue for {doc.name}. Tracking ID: {tracking_id}. Bank Ref: {bank_ref_no}. Integration Request: {integration_request.name}",
 				"references": [
 					{
 						"reference_doctype": "Sales Invoice",
 						"reference_name": doc.name,
 						"total_amount": doc.grand_total,
 						"outstanding_amount": doc.outstanding_amount,
-						"allocated_amount": min(payment_amount, doc.outstanding_amount)
+						"allocated_amount": allocated_amount
 					}
 				]
 			})
