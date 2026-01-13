@@ -1,0 +1,20 @@
+<!-- DEPRECATED: This web-based checkout is deprecated.
+     Use API-based integration with WebView for mobile apps.
+     See CCAVENUE_API_INTEGRATION.md for implementation guide. -->
+
+{% block script %}
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
+    <script type="text/javascript">
+        $(document).ready(function(){
+            window.addEventListener('message', function(e) {
+                $("#paymentFrame").css("height", e.data['newHeight'] + 'px');
+                console.log(e);
+            }, false);
+        });
+    </script>
+{% endblock %}
+
+{%- block page_content -%}
+    <iframe id="paymentFrame" height="100%" width="100%" src="{{ api_url }}&merchant_id={{ payment_data.merchant_id }}&encRequest={{ payment_data.encRequest }}&access_code={{ payment_data.access_code }}">
+    </iframe>
+{% endblock %}

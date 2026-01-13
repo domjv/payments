@@ -13,6 +13,9 @@ app_license = "MIT"
 # include js, css files in header of desk.html
 # app_include_css = "/assets/pay/css/pay.css"
 # app_include_js = "/assets/pay/js/pay.js"
+app_include_js = [
+    "payments/public/js/ccavenue_session_handler.js"
+]
 
 # include js, css files in header of web template
 # web_include_css = "/assets/pay/css/pay.css"
@@ -94,7 +97,10 @@ before_uninstall = "payments.utils.delete_custom_fields"
 # ---------------
 # Extend standard doctype classes
 
-extend_doctype_class = {"Web Form": "payments.overrides.payment_webform.PaymentWebForm"}
+extend_doctype_class = {
+	"Web Form": "payments.overrides.payment_webform.PaymentWebForm",
+	"Sales Invoice": "payments.overrides.sales_invoice.CustomSalesInvoice"
+}
 
 # Document Events
 # ---------------
@@ -107,6 +113,19 @@ extend_doctype_class = {"Web Form": "payments.overrides.payment_webform.PaymentW
 # 		"on_trash": "method"
 # 	}
 # }
+
+# TODO: Uncomment this before going live on CCAvenue payemnts on IVY Living
+doc_events = {
+	"Payment Request": {
+		"on_payment_authorized":"payments.utils.ivyliving_methods.handle_payment_authorization_payment_request"
+	},
+	"Customer":{
+		"on_payment_authorized":"payments.utils.ivyliving_methods.handle_payment_authorization_customer"
+	},
+	"Sales Invoice": {
+		"on_payment_authorized": "payments.overrides.sales_invoice.handle_payment_authorization_sales_invoice"
+	}
+}
 
 # Scheduled Tasks
 # ---------------
