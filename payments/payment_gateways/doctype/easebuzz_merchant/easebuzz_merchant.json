@@ -1,0 +1,106 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:{merchant_name}",
+ "creation": "2025-01-27 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "merchant_name",
+  "is_default",
+  "merchant_key",
+  "salt",
+  "environment",
+  "column_break_itky",
+  "bank_account",
+  "debtors_account",
+  "company"
+ ],
+ "fields": [
+  {
+   "fieldname": "merchant_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Merchant Name",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "Mark this merchant as the default/parent company merchant. Only one merchant can be default.",
+   "fieldname": "is_default",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Is Default Merchant"
+  },
+  {
+   "fieldname": "merchant_key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Merchant Key",
+   "reqd": 1
+  },
+  {
+   "fieldname": "salt",
+   "fieldtype": "Password",
+   "in_list_view": 1,
+   "label": "Salt",
+   "reqd": 1
+  },
+  {
+   "fieldname": "environment",
+   "fieldtype": "Select",
+   "label": "Environment",
+   "options": "Test\nProduction",
+   "reqd": 1
+  },
+  {
+   "description": "If empty it will select the Debtors account of the company. Give only prefix, the company will be fetched from the company field.",
+   "fieldname": "debtors_account",
+   "fieldtype": "Data",
+   "label": "Debtors Account"
+  },
+  {
+   "description": "If empty it will select the Easebuzz account of the company. Give only prefix, the company will be fetched from the company field.",
+   "fieldname": "bank_account",
+   "fieldtype": "Data",
+   "label": "Bank Account"
+  },
+  {
+   "description": "Link to company for this merchant configuration.",
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company"
+  },
+  {
+   "fieldname": "column_break_itky",
+   "fieldtype": "Column Break"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2025-01-27 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Payment Gateways",
+ "name": "Easebuzz Merchant",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
