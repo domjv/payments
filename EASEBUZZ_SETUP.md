@@ -62,7 +62,7 @@ In the Easebuzz Merchant form, click **Test Connection** button to verify creden
 
 ## Usage
 
-### Option 1: Direct API Integration (Recommended for NextJS/React Native)
+### API Integration (for NextJS/React Native Frontends)
 
 #### Initiate Payment
 ```javascript
@@ -95,54 +95,6 @@ const response = await fetch(
 
 const data = await response.json();
 console.log(data.message.status); // 'Completed' or 'Failed'
-```
-
-### Option 2: ERPNext Checkout Page
-
-```python
-# In your doctype controller
-def get_payment_url(self):
-    from payments.utils import get_payment_gateway_controller
-    
-    controller = get_payment_gateway_controller("Easebuzz")
-    
-    payment_details = {
-        "amount": self.outstanding_amount,
-        "title": f"Payment for {self.name}",
-        "description": f"Payment for {self.name}",
-        "reference_doctype": self.doctype,
-        "reference_docname": self.name,
-        "payer_email": self.customer_email,
-        "payer_name": self.customer,
-        "currency": "INR"
-    }
-    
-    return controller.get_payment_url(**payment_details)
-```
-
-### Option 3: JavaScript Helper
-
-```javascript
-// Include in your page
-{{ include_script('easebuzz.js') }}
-
-// Use the helper
-frappe.easebuzz_payment({
-  amount: 1000,
-  reference_doctype: 'Sales Invoice',
-  reference_docname: 'SINV-001',
-  payer_email: 'customer@example.com',
-  payer_name: 'CUST-001',
-  description: 'Payment for Invoice'
-}, 
-function(response) {
-  // Success callback
-  console.log('Payment successful:', response);
-},
-function(error) {
-  // Failure callback
-  console.log('Payment failed:', error);
-});
 ```
 
 ## Multi-Merchant Configuration
@@ -277,3 +229,16 @@ MIT License - See LICENSE file
 **Created**: 2025-01-27  
 **Version**: 1.0.0  
 **Compatibility**: ERPNext v14+, Frappe v14+
+└── payment_gateways/
+    └── doctype/
+        ├── easebuzz_settings/
+        │   ├── __init__.py
+        │   ├── easebuzz_settings.json
+        │   ├── easebuzz_settings.py      # Main controller with API endpoints
+        │   ├── easebuzz_settings.js      # Form script
+        │   └── easebuzz_utils.py         # Utility functions
+        └── easebuzz_merchant/
+            ├── __init__.py
+            ├── easebuzz_merchant.json
+            ├── easebuzz_merchant.py      # Merchant controller
+            └── easebuzz_merchant.js      # Form script
