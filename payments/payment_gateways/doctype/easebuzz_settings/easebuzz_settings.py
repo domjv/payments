@@ -305,9 +305,10 @@ Integration Request: {self.integration_request.name}"""
 
     def create_payment_request_data(self, integration_request_name, **kwargs):
         """Create payment data for Easebuzz request"""
-        # Format the data as required by Easebuzz
+        # Easebuzz txnid: alphanumeric + hyphen only (no @). Use integration request name as unique id.
         order_id = kwargs.get('order_id', integration_request_name)
-        token = order_id + "@" + integration_request_name
+        txnid = integration_request_name  # unique, gateway-safe format
+        token = txnid  # callback uses this to look up Integration Request
         
         # Get company and merchant
         company = kwargs.get('company')
@@ -331,16 +332,10 @@ Integration Request: {self.integration_request.name}"""
         charge_list = frappe.get_all("Payment Charge", filters={'disabled': 0}, fields=['*'])
         outstanding_amount = kwargs.get('amount')
         total_charges = 0
-        
-        log_message = f"Easebuzz Charges - Original: {outstanding_amount}, "
         for charge in charge_list:
             charge_amount = (outstanding_amount * charge.charge_percent / 100)
             charge_amount = math.ceil(charge_amount * 100) / 100
             total_charges = total_charges + charge_amount
-            log_message += f"Charge: {charge.charge_percent}%={charge_amount}, "
-        log_message += f"Total: {total_charges}, Final: {outstanding_amount + total_charges}"
-        frappe.log_error(log_message, "Easebuzz Payment Charges")
-        
         final_amount = outstanding_amount + total_charges
         
         # Get merchant environment
@@ -349,35 +344,52 @@ Integration Request: {self.integration_request.name}"""
         # Get customer mobile
         phone = customer_dict.get('mobile_no') or customer_dict.get('phone') or kwargs.get('phone', '9999999999')
         
+        # zipcode: Easebuzz expects numeric only (e.g. 6 digits for India)
+        zipcode_raw = kwargs.get('custom_pincode') or customer_dict.get('custom_pincode') or ''
+        zipcode = "000000"
+        if zipcode_raw and str(zipcode_raw).strip():
+            s = str(zipcode_raw).strip()
+            if s.isdigit():
+                zipcode = s[:10]  # cap length
+            else:
+                zipcode = "".join(c for c in s if c.isdigit()) or "000000"
+
+        # udf1-udf5: one value each (Easebuzz allows ^[a-zA-Z.0-9/\\,\s_#@\-=+&]{1,300}$ per field; no pipe)
+        def _udf_sanitize(s):
+            if s is None:
+                return ""
+            allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.0123456789/\\,_ #@-=+&")
+            return "".join(c if c in allowed else "_" for c in str(s).strip())[:300]
+
+        udf1_val = _udf_sanitize(kwargs.get("reference_doctype"))
+        udf2_val = _udf_sanitize(kwargs.get("reference_docname"))
+        udf3_val = _udf_sanitize(token)
+        udf4_val = _udf_sanitize(frappe.session.user or "Guest")
+        udf5_val = _udf_sanitize(merchant_doc.name)
+
         # Build payment data
         payment_data = {
-            'txnid': token,
+            'txnid': txnid,
             'amount': str(final_amount),
-            'productinfo': kwargs.get('description', 'Payment'),
-            'firstname': billing_name,
-            'phone': phone,
-            'email': kwargs.get('payer_email', frappe.session.user),
+            'productinfo': (kwargs.get('description') or 'Payment')[:500],
+            'firstname': (billing_name or 'Customer')[:100],
+            'phone': str(phone)[:15] if phone else '9999999999',
+            'email': kwargs.get('payer_email') or frappe.session.user or '',
             'surl': get_url(
                 f"/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.verify_transaction?merchant={merchant_doc.name}"),
             'furl': get_url(
                 f"/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.verify_transaction?merchant={merchant_doc.name}"),
-            'udf1': json.dumps({
-                "reference_doctype": kwargs.get("reference_doctype"),
-                "reference_docname": kwargs.get("reference_docname"),
-                "token": token,
-                "user": frappe.session.user,
-                "merchant_name": merchant_doc.name
-            }),
-            'udf2': '',
-            'udf3': '',
-            'udf4': '',
-            'udf5': '',
-            'address1': f'{customer_dict.get("custom_house_no__floor", "")} {customer_dict.get("custom_building__block_number", "")} {customer_dict.get("custom_landmark__area_name", "")}'.strip() or "NA",
+            'udf1': udf1_val,
+            'udf2': udf2_val,
+            'udf3': udf3_val,
+            'udf4': udf4_val,
+            'udf5': udf5_val,
+            'address1': (f'{customer_dict.get("custom_house_no__floor", "")} {customer_dict.get("custom_building__block_number", "")} {customer_dict.get("custom_landmark__area_name", "")}'.strip() or "NA")[:250],
             'address2': '',
-            'city': customer_dict.get('custom_city', "NA"),
-            'state': kwargs.get('custom_state', customer_dict.get('custom_state', 'NA')),
+            'city': (customer_dict.get('custom_city') or "NA")[:50],
+            'state': (kwargs.get('custom_state') or customer_dict.get('custom_state') or 'NA')[:50],
             'country': 'India',
-            'zipcode': kwargs.get('custom_pincode', 'NA'),
+            'zipcode': zipcode,
         }
         
         return {
@@ -433,8 +445,11 @@ def initiate_payment(**kwargs):
             - txnid: Transaction ID
     """
     try:
+        # Debug log line
+        frappe.log_error(f"Initiate payment: {kwargs}", "Easebuzz Payment Initiation Error")
         # Validate required parameters
         required_params = ['amount', 'reference_doctype', 'reference_docname', 'payer_email', 'payer_name']
+        
         for param in required_params:
             if not kwargs.get(param):
                 return {
@@ -467,6 +482,7 @@ def initiate_payment(**kwargs):
             payment_request_data['environment']
         )
         
+        frappe.log_error(f"Initiate payment result: {result}", "Easebuzz Payment Initiation Error")
         if result.get('success'):
             return {
                 "success": True,
@@ -534,6 +550,40 @@ def check_payment_status(integration_request_name):
         }
 
 
+def _merchant_data_from_response(response_data):
+    """
+    Build merchant_data from Easebuzz callback.
+    New format: udf1=reference_doctype, udf2=reference_docname, udf3=token, udf4=user, udf5=merchant_name.
+    Legacy: single udf1 with JSON or pipe-separated key=value.
+    """
+    # New format: one value per UDF
+    token = (response_data.get("udf3") or "").strip()
+    if token:
+        return {
+            "reference_doctype": (response_data.get("udf1") or "").strip(),
+            "reference_docname": (response_data.get("udf2") or "").strip(),
+            "token": token,
+            "user": (response_data.get("udf4") or "").strip(),
+            "merchant_name": (response_data.get("udf5") or "").strip(),
+        }
+    # Legacy: parse single udf1 (JSON or pipe key=value)
+    udf1_str = response_data.get("udf1", "") or ""
+    if not udf1_str.strip():
+        return {}
+    s = udf1_str.strip()
+    if s.startswith("{"):
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+    out = {}
+    for part in s.split("|"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
 @frappe.whitelist(allow_guest=True)
 def verify_transaction(return_json=False):
     """
@@ -578,14 +628,10 @@ def verify_transaction(return_json=False):
         if not verify_response_hash(response_data, merchant_salt):
             frappe.log_error("Hash verification failed for Easebuzz response", "Easebuzz Hash Verification Error")
 
-        # Extract UDF1 and parse the JSON
-        udf1_str = response_data.get("udf1", "")
-        merchant_data = {}
+        # Build merchant_data from udf1-udf5 (or legacy single udf1)
+        merchant_data = _merchant_data_from_response(response_data)
 
         try:
-            if udf1_str:
-                merchant_data = json.loads(udf1_str)
-            
             # Set the session user from merchant_data if available
             user = merchant_data.get("user")
             if user and user != "Guest" and frappe.session.user == "Guest":
@@ -605,12 +651,13 @@ def verify_transaction(return_json=False):
             frappe.local.response["location"] = get_url("payment-failed")
             return
 
-        # Get the integration request
+        # Get the integration request (token is integration request name, or legacy "order_id@name")
         token = merchant_data.get("token")
         integration_request = None
 
         if token:
-            integration_request = frappe.get_doc("Integration Request", token.split('@')[1])
+            ir_name = token.split('@')[1] if '@' in token else token
+            integration_request = frappe.get_doc("Integration Request", ir_name)
 
         if not integration_request:
             frappe.log_error(f"Integration request not found for token: {token}", "Easebuzz Payment Error")
@@ -733,20 +780,14 @@ def webhook_callback():
         if merchant_salt and not verify_response_hash(response_data, merchant_salt):
             frappe.log_error("Hash verification failed", "Easebuzz Webhook Error")
         
-        # Extract UDF1 and parse
-        udf1_str = response_data.get("udf1", "")
-        merchant_data = {}
-        
-        try:
-            if udf1_str:
-                merchant_data = json.loads(udf1_str)
-        except:
-            pass
-        
-        # Get the integration request
+        # Build merchant_data from udf1-udf5 (or legacy single udf1)
+        merchant_data = _merchant_data_from_response(response_data)
+
+        # Get the integration request (token is integration request name, or legacy "order_id@name")
         token = merchant_data.get("token")
         if token:
-            integration_request = frappe.get_doc("Integration Request", token.split('@')[1])
+            ir_name = token.split('@')[1] if '@' in token else token
+            integration_request = frappe.get_doc("Integration Request", ir_name)
         else:
             return {
                 "success": False,

@@ -266,7 +266,7 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 				"reference_docname": doc.name,
 				"status": "Completed"
 			},
-			fields=["name", "data"],
+			fields=["name", "data", "integration_request_service"],
 			order_by="creation desc",
 			limit=1
 		)
@@ -274,7 +274,7 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 		if not integration_requests:
 			frappe.log_error(
 				f"Integration Request not found for Sales Invoice {doc.name}",
-				"CCAvenue Payment Entry Creation Error"
+				"Payment Entry Creation Error"
 			)
 			return
 		
@@ -283,6 +283,13 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 		# Parse integration request data to get payment amount
 		data = json.loads(integration_request.data) if integration_request.data else {}
 		payment_amount = data.get("amount", 0)
+		service = getattr(integration_request, "integration_request_service", None) or ""
+
+		# Reference number for duplicate check and Payment Entry (gateway-specific)
+		if service == "Easebuzz":
+			reference_no = data.get("easepayid") or data.get("txnid") or integration_request.name
+		else:
+			reference_no = data.get("tracking_id") or integration_request.name
 		
 		# DUPLICATE PREVENTION CHECKS
 		# Reload the document to get latest outstanding amount
@@ -292,7 +299,7 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 		if doc.outstanding_amount <= 0:
 			frappe.log_error(
 				f"Sales Invoice {doc.name} is already fully paid (outstanding: {doc.outstanding_amount}). Skipping payment entry creation for Integration Request {integration_request.name}",
-				"CCAvenue Duplicate Payment Prevention"
+				"Duplicate Payment Prevention"
 			)
 			return
 		
@@ -300,7 +307,7 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 		existing_payment = frappe.db.exists(
 			"Payment Entry",
 			{
-				"reference_no": data.get("tracking_id", integration_request.name),
+				"reference_no": reference_no,
 				"party": doc.customer,
 				"docstatus": ["in", [0, 1]]  # Draft or Submitted
 			}
@@ -308,80 +315,86 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 		
 		if existing_payment:
 			frappe.log_error(
-				f"Payment Entry already exists for Integration Request {integration_request.name} (Tracking ID: {data.get('tracking_id')}). Skipping duplicate creation for Sales Invoice {doc.name}",
-				"CCAvenue Duplicate Payment Prevention"
+				f"Payment Entry already exists for Integration Request {integration_request.name}. Skipping duplicate creation for Sales Invoice {doc.name}",
+				"Duplicate Payment Prevention"
 			)
 			return
 		
 		# Check 3: Validate payment amount against outstanding
-		# If payment amount exceeds outstanding, adjust it to outstanding amount
 		if payment_amount > doc.outstanding_amount:
 			frappe.log_error(
 				f"Payment amount ({payment_amount}) exceeds outstanding amount ({doc.outstanding_amount}) for Sales Invoice {doc.name}. Adjusting to outstanding amount.",
-				"CCAvenue Payment Amount Adjustment"
+				"Payment Amount Adjustment"
 			)
 			payment_amount = doc.outstanding_amount
 		
-		# Create payment entry
+		# Create payment entry (gateway-aware)
 		try:
-			# Get tracking ID and other payment details
-			tracking_id = data.get("tracking_id", "")
-			payment_mode_name = "CCAvenue"
-			bank_ref_no = data.get("bank_ref_no", "")
-			
-			# Get merchant details from integration request
-			merchant_name = data.get("custom_merchant_name")
-			merchant_doc = None
-			
-			# Try to get merchant configuration
-			if merchant_name:
-				try:
-					merchant_doc = frappe.get_doc("CCAvenue Merchant", merchant_name)
-				except:
-					pass
-			
-			# If no explicit merchant, get based on company
-			if not merchant_doc:
-				ccavenue_settings = frappe.get_doc("CCAvenue Settings")
-				merchant_doc = ccavenue_settings.get_merchant_for_company(company=doc.company)
-			
-			# Determine accounts
 			company_abbr = frappe.db.get_value("Company", doc.company, "abbr")
-			
-			# Get debtors account (paid_from)
-			if merchant_doc and merchant_doc.get("debtors_account"):
-				paid_from = f"{merchant_doc.debtors_account} - {company_abbr}"
-			else:
-				paid_from = doc.debit_to
-			
-			# Get bank account (paid_to)
-			if merchant_doc and merchant_doc.get("bank_account"):
-				paid_to = f"{merchant_doc.bank_account} - {company_abbr}"
-			else:
-				# Default CCAvenue account
-				paid_to = f"CCAvenue - {company_abbr}"
-				
-				# Check if account exists, if not use default bank account
-				if not frappe.db.exists("Account", paid_to):
-					# Get default bank account
-					bank_account = frappe.get_all(
-						"Account",
-						filters={
-							"company": doc.company,
-							"account_type": "Bank",
-							"is_group": 0
-						},
-						limit=1
-					)
-					if bank_account:
-						paid_to = bank_account[0].name
-					else:
-						frappe.throw(_("No bank account found for company {0}").format(doc.company))
-			
-			# Use the validated payment_amount from duplicate prevention checks
 			allocated_amount = min(payment_amount, doc.outstanding_amount)
-			
-			# Create Payment Entry
+
+			if service == "Easebuzz":
+				payment_mode_name = "Easebuzz"
+				merchant_name = data.get("custom_merchant_name")
+				merchant_doc = None
+				if merchant_name:
+					try:
+						merchant_doc = frappe.get_doc("Easebuzz Merchant", merchant_name)
+					except Exception:
+						pass
+				if not merchant_doc:
+					easebuzz_settings = frappe.get_doc("Easebuzz Settings")
+					merchant_doc = easebuzz_settings.get_merchant_for_company(company=doc.company)
+				if merchant_doc and merchant_doc.get("debtors_account"):
+					paid_from = f"{merchant_doc.debtors_account} - {company_abbr}"
+				else:
+					paid_from = doc.debit_to
+				if merchant_doc and merchant_doc.get("bank_account"):
+					paid_to = f"{merchant_doc.bank_account} - {company_abbr}"
+				else:
+					paid_to = f"Easebuzz - {company_abbr}"
+					if not frappe.db.exists("Account", paid_to):
+						bank_account = frappe.get_all(
+							"Account",
+							filters={"company": doc.company, "account_type": "Bank", "is_group": 0},
+							limit=1
+						)
+						paid_to = bank_account[0].name if bank_account else None
+						if not paid_to:
+							frappe.throw(_("No bank account found for company {0}").format(doc.company))
+				remarks = f"Payment received via Easebuzz for {doc.name}. Easepay ID: {data.get('easepayid', '')}. Integration Request: {integration_request.name}"
+			else:
+				payment_mode_name = "CCAvenue"
+				bank_ref_no = data.get("bank_ref_no", "")
+				merchant_name = data.get("custom_merchant_name")
+				merchant_doc = None
+				if merchant_name:
+					try:
+						merchant_doc = frappe.get_doc("CCAvenue Merchant", merchant_name)
+					except Exception:
+						pass
+				if not merchant_doc:
+					ccavenue_settings = frappe.get_doc("CCAvenue Settings")
+					merchant_doc = ccavenue_settings.get_merchant_for_company(company=doc.company)
+				if merchant_doc and merchant_doc.get("debtors_account"):
+					paid_from = f"{merchant_doc.debtors_account} - {company_abbr}"
+				else:
+					paid_from = doc.debit_to
+				if merchant_doc and merchant_doc.get("bank_account"):
+					paid_to = f"{merchant_doc.bank_account} - {company_abbr}"
+				else:
+					paid_to = f"CCAvenue - {company_abbr}"
+					if not frappe.db.exists("Account", paid_to):
+						bank_account = frappe.get_all(
+							"Account",
+							filters={"company": doc.company, "account_type": "Bank", "is_group": 0},
+							limit=1
+						)
+						paid_to = bank_account[0].name if bank_account else None
+						if not paid_to:
+							frappe.throw(_("No bank account found for company {0}").format(doc.company))
+				remarks = f"Payment received via CCAvenue for {doc.name}. Tracking ID: {data.get('tracking_id', '')}. Bank Ref: {bank_ref_no}. Integration Request: {integration_request.name}"
+
 			payment_entry = frappe.get_doc({
 				"doctype": "Payment Entry",
 				"payment_type": "Receive",
@@ -396,9 +409,9 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 				"paid_to_account_currency": frappe.db.get_value("Company", doc.company, "default_currency"),
 				"paid_amount": payment_amount,
 				"received_amount": payment_amount,
-				"reference_no": tracking_id or integration_request.name,
+				"reference_no": reference_no,
 				"reference_date": frappe.utils.nowdate(),
-				"remarks": f"Payment received via CCAvenue for {doc.name}. Tracking ID: {tracking_id}. Bank Ref: {bank_ref_no}. Integration Request: {integration_request.name}",
+				"remarks": remarks,
 				"references": [
 					{
 						"reference_doctype": "Sales Invoice",
@@ -410,17 +423,14 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 				]
 			})
 			
-			# Insert and submit payment entry
 			payment_entry.insert(ignore_permissions=True)
 			payment_entry.submit()
-			
-			# Reload sales invoice to update outstanding amount
 			doc.reload()
 			
 		except Exception as e:
 			frappe.log_error(
 				f"Failed to create Payment Entry for Sales Invoice {doc.name}: {str(e)}\n{frappe.get_traceback()}",
-				"CCAvenue Payment Entry Creation Error"
+				"Payment Entry Creation Error"
 			)
 
 

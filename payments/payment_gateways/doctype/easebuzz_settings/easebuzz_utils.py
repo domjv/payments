@@ -137,21 +137,28 @@ def initiate_payment_api(payment_data, merchant_key, salt, environment):
 		# Make API request
 		response = requests.post(api_url, data=payment_data, timeout=30)
 		response.raise_for_status()
-		
 		result = response.json()
 		
 		if result.get('status') == 1:
+			# API returns access key (hex string), not full URL. Build payment page URL.
+			access_key = result.get('data') or ''
+			pay_base = 'https://testpay.easebuzz.in' if environment != 'Production' else 'https://pay.easebuzz.in'
+			payment_url = f"{pay_base}/pay/{access_key}" if access_key else ''
 			return {
 				'success': True,
 				'status': 1,
-				'data': result.get('data'),
+				'data': payment_url,
 				'message': 'Payment link generated successfully'
 			}
 		else:
+			frappe.log_error(
+				f"Easebuzz API Response: {result}",
+				"Easebuzz Payment Initiation Error"
+			)
 			return {
 				'success': False,
 				'status': 0,
-				'message': result.get('data', 'Failed to generate payment link')
+				'message': result.get('data', result.get('error_desc', 'Failed to generate payment link'))
 			}
 			
 	except requests.exceptions.RequestException as e:
