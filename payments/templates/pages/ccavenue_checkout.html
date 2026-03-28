@@ -15,6 +15,17 @@
 {% endblock %}
 
 {%- block page_content -%}
+    {% if same_window %}
+    {# Full-window redirect: CCAvenue often blocks iframes (X-Frame-Options). Use ?same_window=1 when opening in a new tab. #}
+    <form id="ccavenueRedirectForm" method="get" action="{{ api_url }}" target="_self">
+        <input type="hidden" name="merchant_id" value="{{ payment_data.merchant_id }}" />
+        <input type="hidden" name="encRequest" value="{{ payment_data.encRequest }}" />
+        <input type="hidden" name="access_code" value="{{ payment_data.access_code }}" />
+    </form>
+    <script>document.getElementById("ccavenueRedirectForm").submit();</script>
+    <p class="text-muted">{{ _("Redirecting to payment gateway…") }}</p>
+    {% else %}
     <iframe id="paymentFrame" height="100%" width="100%" src="{{ api_url }}&merchant_id={{ payment_data.merchant_id }}&encRequest={{ payment_data.encRequest }}&access_code={{ payment_data.access_code }}">
     </iframe>
+    {% endif %}
 {% endblock %}

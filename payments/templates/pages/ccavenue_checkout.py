@@ -21,25 +21,32 @@ def get_context(context):
 
     # Validate the integration request
     try:
-        validate_integration_request(frappe.form_dict["token"])
-        
-        # Get the integration request doc
-        doc = frappe.get_doc("Integration Request", frappe.form_dict["token"])
+        token = frappe.form_dict.get("token")
+        if not token:
+            raise ValueError("Missing token")
+        validate_integration_request(token)
+        # Load Integration Request without permission check – token is the secret (Guest can open checkout URL)
+        doc = frappe.get_doc("Integration Request", token, check_permission=False)
         payment_details = json.loads(doc.data)
-        
-        # Generate CCAvenue payment form data
-        ccavenue_settings = frappe.get_doc("CCAvenue Settings")
+        # Generate CCAvenue payment form data (Settings readable for checkout)
+        ccavenue_settings = frappe.get_doc("CCAvenue Settings", None, check_permission=False)
         context.payment_data = ccavenue_settings.create_encrypted_request_data(doc.name, **payment_details)
         
         # Set API URL based on environment
         context.api_url = ccavenue_settings.get_api_url()
         
+        # Same-window redirect avoids CCAvenue iframe blocking (X-Frame-Options)
+        context.same_window = frappe.form_dict.get("same_window") in (1, "1", "true", "yes")
+        
         # Add other context variables
-        context.token = frappe.form_dict["token"]
+        context.token = token
         context.header_img = ccavenue_settings.header_img
         
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), "CCAvenue Checkout Error")
+    except Exception as e:
+        frappe.log_error(
+            f"token={frappe.form_dict.get('token')}\n{frappe.get_traceback()}",
+            "CCAvenue Checkout Error",
+        )
         frappe.redirect_to_message(
             _("Invalid Token"),
             _("Seems token you are using is invalid!"),

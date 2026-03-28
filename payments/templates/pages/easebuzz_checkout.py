@@ -19,12 +19,15 @@ def get_context(context):
 	context.no_cache = 1
 
 	try:
-		validate_integration_request(frappe.form_dict["token"])
-
-		doc = frappe.get_doc("Integration Request", frappe.form_dict["token"])
+		token = frappe.form_dict.get("token")
+		if not token:
+			raise ValueError("Missing token")
+		validate_integration_request(token)
+		# Load without permission check – token is the secret (Guest can open checkout URL)
+		doc = frappe.get_doc("Integration Request", token, check_permission=False)
 		payment_details = json.loads(doc.data)
 
-		easebuzz_settings = frappe.get_doc("Easebuzz Settings")
+		easebuzz_settings = frappe.get_doc("Easebuzz Settings", None, check_permission=False)
 		request_data = easebuzz_settings.create_payment_request_data(doc.name, **payment_details)
 
 		from payments.payment_gateways.doctype.easebuzz_settings.easebuzz_utils import initiate_payment_api
@@ -38,7 +41,7 @@ def get_context(context):
 
 		if result.get("success") and result.get("data"):
 			context.payment_url = result["data"]
-			context.token = frappe.form_dict["token"]
+			context.token = token
 			context.header_img = getattr(easebuzz_settings, "header_img", None)
 		else:
 			frappe.log_error(
