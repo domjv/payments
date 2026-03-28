@@ -44,7 +44,7 @@ This guide provides everything your frontend team needs to integrate Easebuzz pa
 
 ## API Endpoints
 
-**Base URL:** `https://your-erpnext-site.com`
+**Base URL:** `http://livinnza.localhost:8000`
 
 ### 1. Initiate Payment
 
