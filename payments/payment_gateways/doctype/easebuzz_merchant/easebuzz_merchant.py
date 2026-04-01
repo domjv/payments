@@ -1,6 +1,8 @@
 # Copyright (c) 2025, Frappe Technologies and contributors
 # For license information, please see license.txt
 
+import json
+
 import frappe
 from frappe import _
 from frappe.model.document import Document
@@ -12,6 +14,9 @@ class EasebuzzMerchant(Document):
 		# Ensure only one default merchant exists
 		if self.is_default:
 			self.ensure_single_default()
+		
+		# Validate split payments configuration if provided
+		self.validate_split_payments_config()
 	
 	def ensure_single_default(self):
 		"""Ensure only one merchant is marked as default"""
@@ -30,6 +35,38 @@ class EasebuzzMerchant(Document):
 				_("Previous default merchant has been updated. This is now the default merchant."),
 				indicator="blue"
 			)
+	
+	def validate_split_payments_config(self):
+		"""Validate split payments JSON format"""
+		if not self.split_payments_config:
+			return
+		
+		try:
+			split_data = json.loads(self.split_payments_config)
+			
+			# Validate format: must be a dictionary
+			if not isinstance(split_data, dict):
+				frappe.throw(_("Split payments configuration must be a JSON object (dictionary)."))
+			
+			# Validate each label and amount
+			for label, amount in split_data.items():
+				# Validate label format (should be alphanumeric with underscores)
+				if not isinstance(label, str) or not label:
+					frappe.throw(_("Split payment labels must be non-empty strings."))
+				
+				# Validate amount is numeric
+				if not isinstance(amount, (int, float)):
+					frappe.throw(_("Split payment amount for label '{0}' must be numeric.").format(label))
+				
+				# Validate amount is positive
+				if amount <= 0:
+					frappe.throw(_("Split payment amount for label '{0}' must be positive.").format(label))
+		
+		except json.JSONDecodeError as e:
+			frappe.throw(_("Invalid JSON format in split payments configuration: {0}").format(str(e)))
+		except Exception as e:
+			if "throw" not in str(e.__class__):
+				frappe.throw(_("Error validating split payments configuration: {0}").format(str(e)))
 
 
 def get_default_merchant():

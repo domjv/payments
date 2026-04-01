@@ -367,6 +367,39 @@ Integration Request: {self.integration_request.name}"""
         udf4_val = _udf_sanitize(frappe.session.user or "Guest")
         udf5_val = _udf_sanitize(merchant_doc.name)
 
+        # Handle split payments
+        split_payments_json = None
+        split_payments_labels = kwargs.get('split_payments_labels')
+        
+        if split_payments_labels:
+            # API caller provided split configuration
+            # Validate it's a dict or JSON string
+            if isinstance(split_payments_labels, str):
+                split_payments_json = split_payments_labels
+            elif isinstance(split_payments_labels, dict):
+                split_payments_json = json.dumps(split_payments_labels)
+        elif merchant_doc.get('split_payments_config'):
+            # Use merchant's default configuration
+            split_payments_json = merchant_doc.split_payments_config
+        
+        # Validate split amounts equal final_amount if splits provided
+        if split_payments_json:
+            try:
+                split_data = json.loads(split_payments_json)
+                total_split = sum(float(v) for v in split_data.values())
+                # Allow small floating point differences (0.01)
+                if abs(total_split - final_amount) > 0.01:
+                    frappe.log_error(
+                        f"Split payments total ({total_split}) doesn't match transaction amount ({final_amount}). "
+                        f"Merchant: {merchant_doc.name}, Transaction: {txnid}",
+                        "Easebuzz Split Payment Warning"
+                    )
+            except Exception as e:
+                frappe.log_error(
+                    f"Split payments validation error: {str(e)}\nMerchant: {merchant_doc.name}, Transaction: {txnid}",
+                    "Easebuzz Split Payment Error"
+                )
+
         # Build payment data
         payment_data = {
             'txnid': txnid,
@@ -391,6 +424,10 @@ Integration Request: {self.integration_request.name}"""
             'country': 'India',
             'zipcode': zipcode,
         }
+        
+        # Add split_payments if configured
+        if split_payments_json:
+            payment_data['split_payments'] = split_payments_json
         
         return {
             "payment_data": payment_data,
@@ -437,6 +474,10 @@ def initiate_payment(**kwargs):
         custom_pincode (str, optional): Customer pincode
         custom_state (str, optional): Customer state
         phone (str, optional): Customer phone number
+        split_payments_labels (dict|str, optional): Split payment configuration.
+            Can be a dict like {"label_HDFC": 100, "label_ICICI": 50} or JSON string.
+            If not provided, uses merchant's default split configuration (if configured).
+            Total of all split amounts should equal the transaction amount.
         
     Returns:
         dict: Payment initiation data including:

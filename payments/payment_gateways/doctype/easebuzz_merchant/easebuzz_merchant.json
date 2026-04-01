@@ -14,7 +14,9 @@
   "column_break_itky",
   "bank_account",
   "debtors_account",
-  "company"
+  "company",
+  "split_payments_section",
+  "split_payments_config"
  ],
  "fields": [
   {
@@ -75,6 +77,18 @@
   {
    "fieldname": "column_break_itky",
    "fieldtype": "Column Break"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "split_payments_section",
+   "fieldtype": "Section Break",
+   "label": "Split Payments Configuration"
+  },
+  {
+   "description": "JSON configuration for split payments. Example: {\"label_HDFC\": 100, \"label_ICICI\": 50}. Labels must be provided by Easebuzz team. Leave empty if not using split payments.",
+   "fieldname": "split_payments_config",
+   "fieldtype": "Long Text",
+   "label": "Split Payments Labels"
   }
  ],
  "grid_page_length": 50,
