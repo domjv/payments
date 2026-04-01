@@ -161,7 +161,7 @@ class CCAvenueSettings(Document):
         data = self.data
 
         # Get payment status from data
-        if data.get("order_status") == "Success" or data.get("order_status") == "Shipped":
+        if data.get("order_status") in ("Success", "Shipped"):
             status = "Completed"
             self.integration_request.update_status(data, "Completed")
             self.flags.status_changed_to = "Completed"
@@ -172,6 +172,8 @@ class CCAvenueSettings(Document):
         redirect_to = data.get("redirect_to") or None
         redirect_message = data.get("redirect_message") or None
 
+        # Important: keep this so Sales Invoice/Payment Request handlers run
+        # and Payment Entry creation logic executes on successful payment.
         if self.flags.status_changed_to == "Completed":
             if self.data.reference_doctype and self.data.reference_docname:
                 custom_redirect_to = None
@@ -182,19 +184,33 @@ class CCAvenueSettings(Document):
                 except Exception:
                     frappe.log_error(frappe.get_traceback())
 
-                if custom_redirect_to:
+                # Use doctype-provided redirect only when no explicit redirect_to exists
+                if custom_redirect_to and not redirect_to:
                     redirect_to = custom_redirect_to
 
+        # Redirect behavior:
+        # 1) If redirect_to exists -> redirect there directly (success/failure both)
+        #    and append integration_id.
+        # 2) Otherwise fallback to framework pages.
+        if redirect_to:
+            separator = "&" if "?" in redirect_to else "?"
             redirect_url = (
-                f"payment-success?doctype={self.data.reference_doctype}&docname={self.data.reference_docname}"
+                f"{redirect_to}{separator}"
+                + urlencode({"integration_id": self.integration_request.name})
             )
         else:
-            redirect_url = "payment-failed"
+            if self.flags.status_changed_to == "Completed":
+                redirect_url = (
+                    f"payment-success?doctype={self.data.reference_doctype}"
+                    f"&docname={self.data.reference_docname}"
+                )
+            else:
+                redirect_url = "payment-failed"
 
-        if redirect_to:
-            redirect_url += "&" + urlencode({"redirect_to": redirect_to})
         if redirect_message:
-            redirect_url += "&" + urlencode({"redirect_message": redirect_message})
+            redirect_url += ("&" if "?" in redirect_url else "?") + urlencode(
+                {"redirect_message": redirect_message}
+            )
 
         return {"redirect_to": redirect_url, "status": status}
 
