@@ -6,12 +6,13 @@ Complete guide for integrating Easebuzz payment gateway with ERPNext and externa
 
 1. [Overview](#overview)
 2. [Multi-Merchant Configuration](#multi-merchant-configuration)
-3. [API Endpoints](#api-endpoints)
-4. [NextJS/Web Integration](#nextjs-integration)
-5. [React Native/Mobile Integration](#react-native-integration)
-6. [Payment Flow](#payment-flow)
-7. [Error Handling](#error-handling)
-8. [Testing](#testing)
+3. [Split Payments](#split-payments)
+4. [API Endpoints](#api-endpoints)
+5. [NextJS/Web Integration](#nextjs-integration)
+6. [React Native/Mobile Integration](#react-native-integration)
+7. [Payment Flow](#payment-flow)
+8. [Error Handling](#error-handling)
+9. [Testing](#testing)
 
 ---
 
@@ -47,6 +48,7 @@ The Easebuzz integration follows the same architecture as CCAvenue and supports:
 | **Company** | Link to ERPNext Company (optional for default merchant) | No |
 | **Bank Account** | Bank account prefix for payment entries | No |
 | **Debtors Account** | Debtors account prefix | No |
+| **Split Payments Configuration** | JSON config for split payments (see [Split Payments](#split-payments)) | No |
 
 ### Default Merchant Strategy
 
@@ -84,6 +86,81 @@ When a payment is initiated:
 
 ---
 
+## Split Payments
+
+**NEW:** Split payments allow a single transaction to be automatically distributed across multiple accounts or entities.
+
+### Overview
+
+Split payments is useful for:
+- **Marketplace platforms**: Split between platform and vendors
+- **Multi-tenant systems**: Distribute fees to different business units
+- **Commission-based systems**: Automatic revenue sharing
+
+### Configuration
+
+#### Method 1: Merchant Default Configuration
+
+Configure default splits in the Easebuzz Merchant document:
+
+1. Navigate to **Payment Gateways > Easebuzz Merchant**
+2. Open or create a merchant
+3. Scroll to **Split Payments Configuration** section
+4. Add JSON configuration with labels provided by Easebuzz:
+
+```json
+{
+  "label_HDFC": 150,
+  "label_ICICI": 100
+}
+```
+
+**Important:** 
+- Labels must be exactly as provided by Easebuzz support team
+- Total amounts should match your typical transaction amounts
+- JSON format is validated on save
+
+#### Method 2: Dynamic Per-Transaction Splits
+
+Pass `split_payments_labels` in the API call to override merchant defaults:
+
+```json
+{
+  "amount": 250,
+  "split_payments_labels": {
+    "label_platform": 25,
+    "label_vendor": 225
+  }
+}
+```
+
+### Example: Marketplace with 10% Commission
+
+```json
+{
+  "amount": 1000,
+  "reference_doctype": "Sales Invoice",
+  "reference_docname": "SINV-001",
+  "payer_email": "customer@example.com",
+  "payer_name": "CUST-001",
+  "split_payments_labels": {
+    "label_platform": 100,
+    "label_vendor_xyz": 900
+  }
+}
+```
+
+### Validation Rules
+
+- ✅ Labels must be non-empty strings
+- ✅ Amounts must be numeric and positive
+- ✅ Total should equal transaction amount (warning logged if not)
+- ✅ JSON format must be valid
+
+**For complete details, see:** [EASEBUZZ_SPLIT_PAYMENTS.md](./EASEBUZZ_SPLIT_PAYMENTS.md)
+
+---
+
 ## API Endpoints
 
 All endpoints are available at: `https://your-erpnext-site.com/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.<method_name>`
@@ -112,6 +189,7 @@ All endpoints are available at: `https://your-erpnext-site.com/api/method/paymen
 | `custom_merchant_name` | string | No | Specific merchant to use |
 | `custom_pincode` | string | No | Customer pincode |
 | `custom_state` | string | No | Customer state |
+| `split_payments_labels` | dict/string | No | Split payment configuration (overrides merchant default). See [Split Payments](#split-payments) |
 
 #### Response
 
