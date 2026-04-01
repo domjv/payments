@@ -11,6 +11,8 @@
   "environment",
   "integration_settings_section",
   "redirect_to",
+  "webhook_info_section",
+  "webhook_url_html",
   "api_header_section",
   "header_img"
  ],
@@ -51,6 +53,19 @@
    "fieldname": "redirect_to",
    "fieldtype": "Data",
    "label": "Redirect To"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "webhook_info_section",
+   "fieldtype": "Section Break",
+   "label": "Webhook / Callback URLs"
+  },
+  {
+   "description": "Configure these URLs in your Easebuzz dashboard. The Webhook URL receives server-side POST notifications for every payment (success or failure). The Redirect Callback (surl/furl) is used for browser redirect after payment.",
+   "fieldname": "webhook_url_html",
+   "fieldtype": "HTML",
+   "label": "Webhook URLs",
+   "options": "<div class='alert alert-info'><strong>Webhook URL (configure in Easebuzz dashboard):</strong><br><code id='eb-webhook-url'>/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.webhook_callback</code><br><br><strong>Redirect Callback (surl / furl) — set automatically per merchant:</strong><br><code>/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.verify_transaction?merchant=&lt;merchant_name&gt;</code><br><br>Copy these paths and prefix with your site domain, e.g. <em>https://your-site.com/api/method/...</em></div>"
   },
   {
    "collapsible": 1,

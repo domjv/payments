@@ -1,159 +1,132 @@
-# Easebuzz Split Payments - Agent Skill
+# Agent Skill — Easebuzz Split Payments
 
-**Agent Type:** Payment Integration Specialist  
-**Skill Level:** Advanced  
 **Domain:** Payment Gateway Integration  
-**Version:** 1.0
+**Scope:** Easebuzz split payments, webhooks, percentage-based configuration  
+**Version:** 2.0 (April 2026)
 
 ---
 
-## Overview
+## What this skill covers
 
-This agent skill document describes the capabilities and knowledge required to work with Easebuzz Split Payments integration in the ERPNext/Frappe payments app. This skill enables agents to configure, troubleshoot, and optimize split payment functionality.
+1. Configuring percentage-based split payments in `Easebuzz Merchant`
+2. Using the `split_payments_labels` API parameter for dynamic per-transaction splits
+3. Webhook setup for both normal and split payments
+4. Debugging payment / webhook / hash issues
 
 ---
 
-## Core Competencies
+## Key Facts
 
-### 1. Understanding Split Payments
+| Fact | Detail |
+|------|--------|
+| Split config format | JSON object — **values are percentages** that must sum to 100 |
+| Minimum labels | 2 (validation enforced on merchant save) |
+| Amount computation | Done server-side in `create_payment_request_data()` |
+| Priority | API param > merchant config > no split |
+| Hash | `split_payments` field is **NOT** included in the SHA-512 hash |
+| Webhook endpoint | `...easebuzz_settings.webhook_callback` — handles all payment types |
+| Redirect callback | `...easebuzz_settings.verify_transaction?merchant=<name>` |
 
-**What the agent knows:**
-- Split payments allow a single transaction to be distributed across multiple accounts/entities
-- Easebuzz handles the distribution automatically based on labels provided
-- Labels are pre-configured by Easebuzz team for each merchant account
-- Split amounts must sum to the total transaction amount (including charges)
+---
 
-**Key concepts:**
-- **Labels:** Unique identifiers for accounts (e.g., `label_HDFC`, `label_ICICI`)
-- **Split Configuration:** JSON mapping of labels to amounts
-- **Merchant Default:** Default split configuration stored in merchant document
-- **API Override:** Dynamic split configuration passed per transaction
+## Configuration Reference
 
-### 2. Configuration Management
+### Easebuzz Merchant — `split_payments_config`
 
-**Agent can:**
-- Configure split payments in Easebuzz Merchant document
-- Validate JSON format of split payment configuration
-- Set up merchant-level default splits
-- Override merchant defaults via API parameters
-
-**Configuration locations:**
-1. **Easebuzz Merchant DocType** (`split_payments_config` field)
-2. **API Parameter** (`split_payments_labels` in initiate_payment call)
-
-**Validation rules:**
-- JSON must be valid dictionary/object
-- Labels must be non-empty strings
-- Amounts must be numeric and positive
-- Recommended: Sum of amounts should equal transaction amount
-
-### 3. API Integration
-
-**Endpoints:**
-- `POST /api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.initiate_payment`
-
-**Parameters:**
 ```json
 {
-  "split_payments_labels": {
-    "label_name": amount,
+  "label_platform": 10,
+  "label_vendor_a": 55,
+  "label_vendor_b": 35
+}
+```
+
+- Values are **percentage** shares (must sum to 100)
+- Labels are provided by the Easebuzz team
+- Validated on save: JSON format, ≥2 labels, each 0<pct≤100, total=100±0.01
+
+### API call — `split_payments_labels`
+
+```python
+frappe.call(
+    "payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.initiate_payment",
+    amount=1000,
+    split_payments_labels={"label_a": 60, "label_b": 40},  # percentages
     ...
-  }
-}
-```
-
-**OR**
-
-```json
-{
-  "split_payments_labels": "{\"label_name\": amount}"
-}
-```
-
-**Priority:**
-1. API parameter `split_payments_labels` (highest priority)
-2. Merchant's `split_payments_config`
-3. No splits (standard payment)
-
----
-
-## Quick Reference
-
-### API Example
-
-```bash
-curl -X POST "https://site.com/api/method/...initiate_payment" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: token key:secret" \
-  -d '{
-    "amount": 250,
-    "reference_doctype": "Sales Invoice",
-    "reference_docname": "SINV-001",
-    "payer_email": "customer@example.com",
-    "payer_name": "CUST-001",
-    "split_payments_labels": {
-      "label_HDFC": 150,
-      "label_ICICI": 100
-    }
-  }'
-```
-
-### Configuration Example
-
-```json
-{
-  "label_platform": 100,
-  "label_vendor": 900
-}
+)
 ```
 
 ---
 
-## Key Files Modified
+## Webhook Setup
 
-1. `/payments/payment_gateways/doctype/easebuzz_merchant/easebuzz_merchant.json`
-   - Added `split_payments_config` field (Long Text)
+Configure in Easebuzz dashboard:
 
-2. `/payments/payment_gateways/doctype/easebuzz_merchant/easebuzz_merchant.py`
-   - Added `validate_split_payments_config()` method
+```
+https://<your-site>/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.webhook_callback
+```
 
-3. `/payments/payment_gateways/doctype/easebuzz_settings/easebuzz_settings.py`
-   - Updated `create_payment_request_data()` to handle split payments
-   - Updated `initiate_payment()` docstring
+Add `?merchant=<merchant_name>` when multiple merchants are configured.
 
 ---
 
-## Testing Checklist
+## Flow Diagrams
 
-- [ ] Create merchant with valid split configuration
-- [ ] Validate JSON format on save
-- [ ] Initiate payment using merchant default
-- [ ] Initiate payment with API override
-- [ ] Verify amounts sum to transaction total
-- [ ] Complete payment in Easebuzz UAT
-- [ ] Verify split in Easebuzz dashboard
+### Split Payment (high-level)
+
+```mermaid
+flowchart TD
+    A[API: initiate_payment] --> B{split_payments_labels\nkwarg set?}
+    B -- Yes --> C[Use API percentages]
+    B -- No --> D{merchant.split_payments_config\nset?}
+    D -- Yes --> E[Use merchant percentages]
+    D -- No --> F[No split]
+    C --> G[Compute amounts\npct/100 × final_amount]
+    E --> G
+    G --> H[Adjust last label for rounding]
+    H --> I[Append split_payments to payload]
+    I --> J[POST to Easebuzz API]
+    J --> K[Return payment_url to client]
+```
+
+### Webhook / Callback (high-level)
+
+```mermaid
+flowchart TD
+    A[Easebuzz POST] --> B[Verify SHA-512 hash]
+    B --> C[Lookup Integration Request via udf3]
+    C --> D[Update Integration Request]
+    D --> E{status == success?}
+    E -- Yes --> F[Mark Completed]
+    E -- No --> G[Mark Failed]
+    F --> H[on_payment_authorized]
+    G --> H
+    H --> I[Return JSON]
+```
 
 ---
 
-## Common Issues
+## Troubleshooting Quick Reference
 
-| Issue | Solution |
-|-------|----------|
-| Invalid JSON error | Validate JSON format at jsonlint.com |
-| Amount mismatch warning | Recalculate split amounts to match total |
-| Invalid label error | Contact Easebuzz for valid labels |
-| Payment rejected | Verify split payments enabled in Easebuzz account |
-
----
-
-## Resources
-
-- **EASEBUZZ_SPLIT_PAYMENTS.md** - Complete user guide
-- **EASEBUZZ_SPLIT_PAYMENTS_PLAN.md** - Implementation plan
-- [Easebuzz API Docs](https://docs.easebuzz.in/)
+| Error / Symptom | Action |
+|-----------------|--------|
+| `percentages must sum to 100` | Fix merchant config or API param values |
+| `at least 2 labels required` | Add second label |
+| Hash verification failed | Check correct merchant salt is being used |
+| Webhook not received | Verify URL in Easebuzz dashboard, confirm site is reachable |
+| Labels rejected by Easebuzz | Contact Easebuzz support to enable labels |
 
 ---
 
-**Status:** Active  
-**Version:** 1.0  
-**Date:** April 1, 2026
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `easebuzz_merchant.json` | `split_payments_config` description updated; field label updated |
+| `easebuzz_merchant.py` | `validate_split_payments_config` — validates percentages |
+| `easebuzz_settings.json` | Added Webhook URL info section |
+| `easebuzz_settings.py` | `create_payment_request_data` — converts pct → amounts |
+| `test_easebuzz_merchant.py` | Updated for percentage rules |
+| `test_easebuzz_settings.py` | Updated for amount output assertions |
+| `EASEBUZZ_SPLIT_PAYMENTS.md` | Full rewrite with Mermaid diagrams |
+| `EASEBUZZ_INTEGRATION.md` | Updated split payments section |

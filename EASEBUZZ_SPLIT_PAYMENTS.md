@@ -1,598 +1,429 @@
-# Easebuzz Split Payments Integration Guide
+# Easebuzz Split Payments — Integration Guide
 
-**Version:** 1.0  
-**Last Updated:** April 1, 2026
+> **Configuration uses percentages.**  
+> You define how much of the transaction each label receives as a percentage (must sum to 100).  
+> The actual INR amounts are computed server-side at payment time.
 
 ---
 
 ## Table of Contents
 
-1. [What are Split Payments?](#what-are-split-payments)
-2. [Prerequisites](#prerequisites)
-3. [Configuration](#configuration)
-4. [API Usage](#api-usage)
-5. [Examples](#examples)
-6. [Testing](#testing)
-7. [Troubleshooting](#troubleshooting)
-8. [FAQ](#faq)
+1. [What are Split Payments?](#1-what-are-split-payments)
+2. [Prerequisites](#2-prerequisites)
+3. [Flow Diagrams](#3-flow-diagrams)
+4. [Configuration](#4-configuration)
+5. [API Usage](#5-api-usage)
+6. [Webhook Setup](#6-webhook-setup)
+7. [Examples](#7-examples)
+8. [Testing (UAT)](#8-testing-uat)
+9. [Troubleshooting](#9-troubleshooting)
+10. [FAQ](#10-faq)
 
 ---
 
-## What are Split Payments?
+## 1. What are Split Payments?
 
-Split payments is a feature offered by Easebuzz that allows a single transaction amount to be automatically distributed across multiple accounts or entities in a single transaction. This is particularly useful for:
+Split payments is an Easebuzz feature that automatically distributes a single transaction among multiple accounts.  Each "label" is a pre-registered sub-account provided by the Easebuzz team.
 
-- **Marketplace platforms**: Automatically split payments between the platform and vendors
-- **Multi-tenant systems**: Distribute transaction fees to different business units
-- **Commission-based systems**: Automatically split revenue between multiple parties
+**Common use-cases**
 
-### How It Works
-
-When a customer makes a payment of ₹250:
-- ₹150 goes to Account A (label_HDFC)
-- ₹100 goes to Account B (label_ICICI)
-
-Easebuzz handles the distribution automatically based on the labels you provide.
+| Use-case | Example |
+|----------|---------|
+| Marketplace | Platform 10 %, vendor 90 % |
+| Multi-campus university | Campus A 45 %, Campus B 45 %, Central Fund 10 % |
+| Commission system | Agent 5 %, Principal 95 % |
 
 ---
 
-## Prerequisites
+## 2. Prerequisites
 
-Before using split payments, ensure you have:
-
-1. ✅ **Easebuzz Merchant Account** with split payments enabled
-2. ✅ **Split Payment Labels** provided by Easebuzz support team
-3. ✅ **Merchant Configuration** in ERPNext/Frappe
-4. ✅ **UAT Environment Access** for testing
-
-### Getting Split Payment Labels
-
-Contact the Easebuzz support team and request:
-- Enable split payments for your merchant account
-- List of labels (e.g., `label_HDFC`, `label_ICICI`, etc.)
-- Label format and validation rules
-
-**Important:** Labels must exactly match those provided by Easebuzz. Using incorrect labels will cause payment failures.
+- Easebuzz merchant account with **split payments enabled**
+- **Labels** (e.g. `label_HDFC`, `label_platform`) obtained from Easebuzz support
+- ERPNext / Frappe with this payments app installed
+- At least **2 labels** per configuration
 
 ---
 
-## Configuration
+## 3. Flow Diagrams
 
-### Method 1: Configure in Easebuzz Merchant (Recommended)
+### 3.1 Normal (non-split) Payment Flow
 
-This method sets default split configuration for all payments through a specific merchant.
+```mermaid
+sequenceDiagram
+    participant Client as Frontend / App
+    participant ERPNext as ERPNext (Frappe)
+    participant EB as Easebuzz
 
-#### Step 1: Navigate to Easebuzz Merchant
+    Client->>ERPNext: POST initiate_payment(amount, customer, reference)
+    ERPNext->>ERPNext: Create Integration Request
+    ERPNext->>ERPNext: Build payment_data (hash, surl, furl)
+    ERPNext->>EB: POST /payment/initiateLink
+    EB-->>ERPNext: { status:1, data: "access_key" }
+    ERPNext-->>Client: { payment_url: "https://testpay.easebuzz.in/pay/<key>" }
+    Client->>EB: Customer opens payment URL & completes payment
+    EB->>ERPNext: POST verify_transaction?merchant=X  (surl/furl redirect)
+    ERPNext->>ERPNext: Verify SHA-512 hash
+    ERPNext->>ERPNext: Update Integration Request → Completed
+    ERPNext->>ERPNext: on_payment_authorized (Sales Invoice / Payment Request)
+    ERPNext-->>Client: Redirect to success/failure page
+    EB->>ERPNext: POST webhook_callback (server-side, async)
+    ERPNext->>ERPNext: Verify hash, update Integration Request
+```
 
-1. Go to **Payments** → **Payment Gateways** → **Easebuzz Merchant**
-2. Open the merchant you want to configure
-3. Scroll to the **Split Payments Configuration** section
+### 3.2 Split Payment Flow
 
-#### Step 2: Add Split Payment Configuration
+```mermaid
+sequenceDiagram
+    participant Client as Frontend / App
+    participant ERPNext as ERPNext (Frappe)
+    participant EB as Easebuzz
 
-In the **Split Payments Labels** field, enter a JSON object with your labels and amounts:
+    Client->>ERPNext: POST initiate_payment(amount, split_payments_labels={label_A:60, label_B:40})
+    Note over ERPNext: Percentages stored in merchant config<br/>or supplied inline via API
+    ERPNext->>ERPNext: Compute actual amounts<br/>(label_A = 60%×amount, label_B = 40%×amount)
+    ERPNext->>ERPNext: Append split_payments JSON to payment_data
+    ERPNext->>EB: POST /payment/initiateLink  (includes split_payments)
+    EB-->>ERPNext: { status:1, data: "access_key" }
+    ERPNext-->>Client: { payment_url: "…/pay/<key>" }
+    Client->>EB: Customer pays
+    EB->>EB: Distribute funds per split config
+    EB->>ERPNext: POST verify_transaction (redirect callback)
+    ERPNext->>ERPNext: Verify hash, update Integration Request
+    EB->>ERPNext: POST webhook_callback (server-side)
+    ERPNext->>ERPNext: Verify hash, mark Completed
+```
+
+### 3.3 Webhook Flow
+
+```mermaid
+flowchart TD
+    A([Easebuzz sends POST to webhook_callback]) --> B{Response data present?}
+    B -- No --> C[Return error JSON]
+    B -- Yes --> D[Lookup merchant from ?merchant= param]
+    D --> E[Retrieve salt for merchant]
+    E --> F{Verify SHA-512 hash}
+    F -- Fail --> G[Log hash warning, continue processing]
+    F -- Pass --> H[Extract token from udf3]
+    G --> H
+    H --> I{Integration Request found?}
+    I -- No --> J[Return error JSON]
+    I -- Yes --> K[Update Integration Request data]
+    K --> L{status == success?}
+    L -- Yes --> M[Set status = Completed]
+    L -- No --> N[Set status = Failed]
+    M --> O[Call authorize_payment]
+    N --> O
+    O --> P[on_payment_authorized on reference doc]
+    P --> Q[Return JSON with redirect_to]
+```
+
+### 3.4 Split Amount Calculation
+
+```mermaid
+flowchart LR
+    A([Final amount = ₹1000]) --> B[Read split percentages]
+    B --> C{Source?}
+    C -- API param --> D[split_payments_labels kwarg]
+    C -- Merchant default --> E[merchant.split_payments_config]
+    D --> F[Convert pct → amount\n10% → ₹100\n55% → ₹550\n35% → ₹350]
+    E --> F
+    F --> G{Sum == final_amount?}
+    G -- Rounding drift --> H[Add remainder to last label]
+    G -- Exact --> I[Build split_payments JSON]
+    H --> I
+    I --> J([Append to Easebuzz API payload])
+```
+
+---
+
+## 4. Configuration
+
+### 4.1 Merchant-level default (recommended for consistent splits)
+
+1. Open **Payment Gateways → Easebuzz Merchant**
+2. Scroll to **Split Payments Configuration**
+3. Enter a JSON object — **values are percentages**, must sum to 100
 
 ```json
 {
-  "label_HDFC": 150,
-  "label_ICICI": 100
+  "label_platform": 10,
+  "label_vendor_a": 55,
+  "label_vendor_b": 35
 }
 ```
 
-**Format Rules:**
-- Must be valid JSON
-- Keys are the labels provided by Easebuzz
-- Values are numeric amounts (can be integers or decimals)
-- All amounts must be positive
-- Total should match your typical transaction amount (or be calculated dynamically per transaction)
+**Validation enforced on save:**
 
-#### Step 3: Save
+| Rule | Detail |
+|------|--------|
+| Valid JSON object | Must be `{…}` |
+| ≥ 2 labels | At minimum 2 entries |
+| Each pct > 0 and ≤ 100 | No zero or negative shares |
+| Sum = 100 (±0.01) | Allows `33.33 + 33.33 + 33.34` |
 
-Click **Save**. The system will validate your JSON format automatically.
+### 4.2 Per-transaction override via API
 
-**Validation Checks:**
-- ✅ Valid JSON format
-- ✅ Labels are non-empty strings
-- ✅ Amounts are numeric and positive
-
----
-
-### Method 2: Pass Split Payments via API
-
-For dynamic split configurations that change per transaction, you can pass split payments directly in the API call.
-
-See [API Usage](#api-usage) section below.
-
----
-
-## API Usage
-
-### Initiate Payment with Split Payments
-
-**Endpoint:** `/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.initiate_payment`
-
-**Method:** `POST`
-
-**Headers:**
-```
-Content-Type: application/json
-Authorization: token <api_key>:<api_secret>
-```
-
-### Example 1: Using Merchant Default Configuration
-
-If you've configured split payments in the Easebuzz Merchant document, you don't need to pass any additional parameters:
+Pass `split_payments_labels` in the `initiate_payment` call to override the merchant default for a single transaction.
 
 ```json
 {
-  "amount": 250,
-  "currency": "INR",
-  "reference_doctype": "Sales Invoice",
-  "reference_docname": "SINV-2026-00123",
-  "payer_email": "customer@example.com",
-  "payer_name": "CUST-00001",
-  "description": "Payment for invoice SINV-2026-00123",
-  "company": "My Company Ltd"
-}
-```
-
-The system will automatically use the split configuration from the merchant.
-
-### Example 2: Override with Custom Split Configuration
-
-To override the merchant's default or provide dynamic splits:
-
-```json
-{
-  "amount": 250,
-  "currency": "INR",
-  "reference_doctype": "Sales Invoice",
-  "reference_docname": "SINV-2026-00123",
-  "payer_email": "customer@example.com",
-  "payer_name": "CUST-00001",
-  "description": "Payment for invoice SINV-2026-00123",
-  "company": "My Company Ltd",
+  "amount": 1000,
   "split_payments_labels": {
-    "label_HDFC": 150,
-    "label_ICICI": 100
+    "label_platform": 10,
+    "label_vendor_a": 55,
+    "label_vendor_b": 35
   }
 }
 ```
 
-### Example 3: Using JSON String
+**Priority:** `split_payments_labels` (API) > `split_payments_config` (merchant) > no split
 
-You can also pass split payments as a JSON string:
+---
+
+## 5. API Usage
+
+**Endpoint:**
+```
+POST /api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.initiate_payment
+```
+
+### 5.1 Minimal request (merchant default splits)
 
 ```json
 {
-  "amount": 250,
-  "split_payments_labels": "{\"label_HDFC\": 150, \"label_ICICI\": 100}"
+  "amount": 1000,
+  "reference_doctype": "Sales Invoice",
+  "reference_docname": "SINV-2026-00001",
+  "payer_email": "student@example.com",
+  "payer_name": "CUST-00001",
+  "company": "Campus A Ltd"
+}
+```
+
+### 5.2 Request with explicit splits
+
+```json
+{
+  "amount": 1000,
+  "reference_doctype": "Sales Invoice",
+  "reference_docname": "SINV-2026-00001",
+  "payer_email": "student@example.com",
+  "payer_name": "CUST-00001",
+  "company": "Campus A Ltd",
+  "split_payments_labels": {
+    "label_platform": 10,
+    "label_vendor_a": 55,
+    "label_vendor_b": 35
+  }
+}
+```
+
+### 5.3 Response
+
+```json
+{
+  "message": {
+    "success": true,
+    "payment_token": "IR-2026-00001",
+    "payment_url": "https://testpay.easebuzz.in/pay/abc123...",
+    "txnid": "IR-2026-00001",
+    "merchant_name": "Campus A Merchant"
+  }
 }
 ```
 
 ---
 
-## Examples
+## 6. Webhook Setup
 
-### Example 1: Marketplace Platform
+> The webhook endpoint handles **both normal and split payments**.  No extra configuration is needed — the same endpoint works for all payment types.
 
-**Scenario:** Customer pays ₹1000 for a product. Platform keeps ₹100 commission, vendor gets ₹900.
+### 6.1 Webhook URL
 
-**Configuration:**
+Configure this in the **Easebuzz merchant dashboard**:
+
+```
+https://<your-site-domain>/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.webhook_callback
+```
+
+Add `?merchant=<merchant_name>` if you have multiple merchants, e.g.:
+
+```
+https://your-site.com/api/method/...webhook_callback?merchant=Campus+A+Merchant
+```
+
+### 6.2 Redirect callback (surl / furl)
+
+Set automatically per merchant — looks like:
+
+```
+https://<your-site>/api/method/...verify_transaction?merchant=<merchant_name>
+```
+
+You can also see both URLs in the **Easebuzz Settings** doctype under *Webhook / Callback URLs*.
+
+### 6.3 What the webhook does
+
+1. Receives POST from Easebuzz
+2. Verifies SHA-512 hash (logs warning if mismatch, continues)
+3. Looks up the Integration Request via `udf3` (token)
+4. Updates the Integration Request status
+5. Calls `on_payment_authorized` on the reference document
+6. Returns JSON `{ success, status, transaction_id, redirect_to }`
+
+### 6.4 Security — hash verification
+
+The response hash uses the sequence:
+
+```
+salt|status|udf10|udf9|udf8|udf7|udf6|udf5|udf4|udf3|udf2|udf1|email|firstname|productinfo|amount|txnid|key
+```
+
+This is implemented in `verify_response_hash()` in `easebuzz_utils.py`.
+
+---
+
+## 7. Examples
+
+### 7.1 Marketplace — 10 % platform fee
+
+**Merchant config (static):**
 ```json
 {
-  "label_platform": 100,
-  "label_vendor_001": 900
+  "label_platform": 10,
+  "label_vendor_abc": 90
 }
 ```
 
-**API Call:**
-```bash
-curl -X POST "https://your-site.com/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.initiate_payment" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: token <api_key>:<api_secret>" \
-  -d '{
-    "amount": 1000,
-    "reference_doctype": "Sales Order",
-    "reference_docname": "SO-2026-00001",
-    "payer_email": "buyer@example.com",
-    "payer_name": "CUST-00123",
-    "split_payments_labels": {
-      "label_platform": 100,
-      "label_vendor_001": 900
-    }
-  }'
-```
-
-### Example 2: Multi-Campus University
-
-**Scenario:** Student pays ₹50,000 fees. Split between multiple accounts:
-- Campus A: ₹30,000
-- Campus B: ₹15,000
-- Central Fund: ₹5,000
-
-**Merchant Configuration:**
-```json
-{
-  "label_campus_a": 30000,
-  "label_campus_b": 15000,
-  "label_central": 5000
-}
-```
-
-Since this is configured in the merchant, API calls don't need to include split_payments_labels.
-
-### Example 3: Dynamic Commission System
-
-**Scenario:** Commission varies per transaction based on product category.
-
-**Implementation:**
+API call (no extra field needed):
 ```python
-# Python example - calculate split dynamically
-def create_payment_with_split(invoice):
-    amount = invoice.total
-    commission_rate = get_commission_rate(invoice.customer)
-    
-    commission = amount * commission_rate
-    vendor_share = amount - commission
-    
-    split_config = {
-        "label_platform": commission,
-        "label_vendor": vendor_share
-    }
-    
-    # Call Easebuzz API
-    response = requests.post(
-        f"{base_url}/api/method/...initiate_payment",
-        json={
-            "amount": amount,
-            "reference_doctype": "Sales Invoice",
-            "reference_docname": invoice.name,
-            "payer_email": invoice.customer_email,
-            "payer_name": invoice.customer,
-            "split_payments_labels": split_config
-        }
+result = frappe.call(
+    "payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.initiate_payment",
+    amount=1000,
+    reference_doctype="Sales Order",
+    reference_docname="SO-001",
+    payer_email="buyer@example.com",
+    payer_name="CUST-001",
+)
+```
+
+Easebuzz receives: `{"label_platform": 100.0, "label_vendor_abc": 900.0}` (computed from ₹1000)
+
+---
+
+### 7.2 Multi-campus university — 3-way split
+
+**Merchant config:**
+```json
+{
+  "label_campus_a": 45,
+  "label_campus_b": 45,
+  "label_central_fund": 10
+}
+```
+
+For a ₹50,000 payment: `label_campus_a=22500, label_campus_b=22500, label_central_fund=5000`
+
+---
+
+### 7.3 Dynamic per-transaction commissions
+
+```python
+def create_order_payment(order):
+    commission_pct = get_vendor_commission_rate(order.vendor)  # e.g. 8.5
+    vendor_pct = 100 - commission_pct  # 91.5
+
+    return frappe.call(
+        "...initiate_payment",
+        amount=order.grand_total,
+        reference_doctype="Sales Order",
+        reference_docname=order.name,
+        payer_email=order.customer_email,
+        payer_name=order.customer,
+        split_payments_labels={
+            "label_platform": commission_pct,
+            "label_vendor": vendor_pct,
+        },
     )
-    return response.json()
 ```
 
 ---
 
-## Testing
-
-### UAT Environment Testing
-
-Before going to production, test thoroughly in the UAT environment.
-
-#### Step 1: Configure Test Merchant
-
-1. Create an Easebuzz Merchant with UAT credentials
-2. Set Environment to **Test**
-3. Add test split payment labels (get from Easebuzz team)
-
-Example test configuration:
-```json
-{
-  "label_test_account_1": 100,
-  "label_test_account_2": 50
-}
-```
-
-#### Step 2: Initiate Test Payment
-
-Use the API or create a test transaction:
-
-```bash
-curl -X POST "https://your-uat-site.com/api/method/...initiate_payment" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "amount": 150,
-    "reference_doctype": "Sales Invoice",
-    "reference_docname": "TEST-SINV-001",
-    "payer_email": "test@example.com",
-    "payer_name": "Test Customer",
-    "custom_merchant_name": "Test Merchant UAT"
-  }'
-```
-
-#### Step 3: Complete Payment
-
-1. You'll receive a payment URL: `https://testpay.easebuzz.in/pay/...`
-2. Open the URL in a browser
-3. Complete the test payment using Easebuzz test cards
-4. Verify webhook callback is received
-5. Check Integration Request status is updated
-
-#### Step 4: Verify Split in Easebuzz Dashboard
-
-1. Log into Easebuzz UAT dashboard
-2. Check transaction details
-3. Verify split amounts are correct
-4. Verify amounts credited to correct accounts
-
-### Test Checklist
-
-- [ ] Split configuration validates on save
-- [ ] Payment initiation succeeds with splits
-- [ ] Payment URL generated correctly
-- [ ] Payment completes successfully
-- [ ] Webhook callback received
-- [ ] Transaction status updated correctly
-- [ ] Split amounts match configuration
-- [ ] Amounts credited to correct labels
-- [ ] Error handling works (invalid labels, wrong amounts)
-
----
-
-## Troubleshooting
-
-### Issue 1: "Invalid split_payments configuration"
-
-**Cause:** JSON format error in split payments configuration.
-
-**Solution:**
-1. Validate your JSON using a JSON validator (https://jsonlint.com/)
-2. Check for:
-   - Missing or extra commas
-   - Missing quotes around strings
-   - Trailing commas (not allowed in JSON)
-
-**Correct:**
-```json
-{
-  "label_HDFC": 100,
-  "label_ICICI": 50
-}
-```
-
-**Incorrect:**
-```json
-{
-  label_HDFC: 100,        ❌ Missing quotes
-  "label_ICICI": 50,      ❌ Trailing comma
-}
-```
-
-### Issue 2: "Split amounts don't match transaction total"
-
-**Cause:** The sum of split amounts doesn't equal the transaction amount.
-
-**Solution:**
-1. Calculate total split amount
-2. Ensure it matches the transaction amount exactly
-3. Account for payment charges if applicable
-
-**Example:**
-```
-Transaction amount: ₹250
-Payment charges: ₹10
-Final amount: ₹260
-
-Split configuration should total ₹260:
-{
-  "label_HDFC": 160,
-  "label_ICICI": 100
-}
-Total: ₹260 ✅
-```
-
-**Note:** A warning is logged if amounts don't match, but the payment is still attempted. Easebuzz may reject if the mismatch is significant.
-
-### Issue 3: Payment fails with "Invalid label"
-
-**Cause:** Using labels not configured in your Easebuzz merchant account.
-
-**Solution:**
-1. Contact Easebuzz support to verify your labels
-2. Ensure labels match exactly (case-sensitive)
-3. Use only labels provided by Easebuzz team
-
-### Issue 4: Split payments not appearing in Easebuzz dashboard
-
-**Cause:** Split payments might not be enabled for your merchant account.
-
-**Solution:**
-1. Contact Easebuzz support
-2. Request activation of split payments feature
-3. Verify in UAT environment first
-
-### Issue 5: Hash verification failure
-
-**Cause:** Split payments should NOT be included in hash calculation.
-
-**Solution:**
-- Hash generation is automatic
-- `split_payments` parameter is excluded from hash
-- No action needed (system handles this correctly)
-
----
-
-## FAQ
-
-### Q1: Can I change split configuration per transaction?
-
-**A:** Yes, in two ways:
-1. Pass `split_payments_labels` parameter in API call (overrides merchant default)
-2. Create multiple merchants with different split configurations
-
-### Q2: What happens if split amounts don't match transaction total?
-
-**A:** 
-- System logs a warning
-- Payment is still attempted
-- Easebuzz may reject if mismatch is significant
-- Best practice: Always ensure amounts match exactly
-
-### Q3: Can I use percentage-based splits instead of fixed amounts?
-
-**A:** 
-- Easebuzz API requires actual amounts, not percentages
-- Calculate percentages in your application before calling API
-- Pass calculated amounts in split_payments_labels
-
-**Example:**
-```python
-amount = 1000
-platform_percentage = 10  # 10%
-vendor_percentage = 90    # 90%
-
-split_config = {
-    "label_platform": amount * platform_percentage / 100,  # 100
-    "label_vendor": amount * vendor_percentage / 100       # 900
-}
-```
-
-### Q4: Are split payments mandatory?
-
-**A:** No. Split payments are completely optional.
-- If not configured, payments work normally (100% to merchant)
-- Backward compatible with existing integrations
-- Only activated when explicitly configured
-
-### Q5: Can I have more than 2 splits?
-
-**A:** Yes, you can split across multiple labels:
+### 7.4 Four equal partners (25 % each)
 
 ```json
 {
-  "label_account_1": 100,
-  "label_account_2": 50,
-  "label_account_3": 30,
-  "label_account_4": 20
+  "split_payments_labels": {
+    "label_partner_1": 25,
+    "label_partner_2": 25,
+    "label_partner_3": 25,
+    "label_partner_4": 25
+  }
 }
 ```
 
-Limit depends on Easebuzz's restrictions (confirm with support).
+---
 
-### Q6: How do I test in UAT before production?
+## 8. Testing (UAT)
 
-**A:**
-1. Create test merchant with Environment = "Test"
-2. Use UAT credentials from Easebuzz
-3. Get test labels from Easebuzz team
-4. Test thoroughly using test cards
-5. Verify splits in Easebuzz UAT dashboard
-6. Once confirmed working, create production merchant
+1. **Get test labels** from Easebuzz — labels look like `label_HDFC`, `label_testaccount`, etc.
+2. Create a merchant in ERPNext with Environment = **Test**
+3. Set `split_payments_config`:
+   ```json
+   { "label_test_a": 70, "label_test_b": 30 }
+   ```
+4. Call `initiate_payment` and open the returned URL: `https://testpay.easebuzz.in/pay/<key>`
+5. Complete the payment using Easebuzz test cards
+6. Verify webhook fires — check **Integration Requests** in ERPNext
+7. Verify split amounts appear correctly in the Easebuzz UAT dashboard
 
-### Q7: What's the difference between merchant config and API parameter?
+### Checklist
 
-**A:**
-
-| Method | Use Case | Priority |
-|--------|----------|----------|
-| **Merchant Config** | Fixed splits for all transactions through that merchant | Lower |
-| **API Parameter** | Dynamic splits that vary per transaction | Higher (overrides merchant) |
-
-**Best Practice:** 
-- Use merchant config for consistent splits
-- Use API parameter for dynamic/variable splits
-
-### Q8: Can I split payments across different payment gateways?
-
-**A:** No. Split payments only work within Easebuzz. To split across gateways, you'd need to:
-1. Receive full payment in one gateway
-2. Use separate transfer/payout APIs to distribute funds
-
-### Q9: How are refunds handled with split payments?
-
-**A:** 
-- Refunds reverse the split proportionally
-- Handled automatically by Easebuzz
-- Each account is debited based on original split
-
-### Q10: Does split payments affect transaction fees?
-
-**A:**
-- Easebuzz may charge additional fees for split payments
-- Check your merchant agreement
-- Fees are typically deducted from the total before split
-- Confirm fee structure with Easebuzz support
+- [ ] Merchant config saves without errors
+- [ ] Percentages that don't sum to 100 are rejected
+- [ ] Payment initiation returns a valid URL
+- [ ] Payment completes
+- [ ] Webhook callback updates Integration Request to *Completed*
+- [ ] Split amounts in Easebuzz dashboard match expected values
 
 ---
 
-## Best Practices
+## 9. Troubleshooting
 
-### 1. Validation
-
-✅ **Do:**
-- Validate split amounts sum to transaction total
-- Use exact label names from Easebuzz
-- Test thoroughly in UAT environment
-- Handle errors gracefully
-
-❌ **Don't:**
-- Hardcode labels without confirmation
-- Skip UAT testing
-- Ignore validation warnings
-
-### 2. Configuration Management
-
-✅ **Do:**
-- Document your labels and their purpose
-- Use merchant config for standard splits
-- Use API parameters for dynamic splits
-- Keep labels centralized and maintained
-
-❌ **Don't:**
-- Spread label configuration across multiple places
-- Change labels without coordination with Easebuzz
-- Use production labels in UAT
-
-### 3. Error Handling
-
-✅ **Do:**
-- Log split payment errors
-- Monitor for amount mismatch warnings
-- Have fallback logic for payment failures
-- Alert on split configuration issues
-
-❌ **Don't:**
-- Silently ignore errors
-- Assume splits will always work
-- Skip monitoring
-
-### 4. Documentation
-
-✅ **Do:**
-- Document your split payment logic
-- Maintain label registry
-- Keep team informed of changes
-- Update documentation when labels change
-
-❌ **Don't:**
-- Leave split logic undocumented
-- Change without communication
-- Assume everyone knows the labels
+| Symptom | Likely Cause | Fix |
+|---------|-------------|-----|
+| `ValidationError: percentages must sum to 100` | Config adds up to ≠ 100 | Recalculate so total = 100 |
+| `ValidationError: at least 2 labels required` | Only one label in config | Add a second label |
+| Payment page loads but payment fails | Labels not enabled on Easebuzz account | Contact Easebuzz support |
+| Hash verification failed in error log | Wrong salt for the merchant | Check salt in Merchant config |
+| `Integration Request not found` | Wrong `udf3` token | Check token storage in `create_payment_request_data` |
+| Webhook not received | Wrong webhook URL in Easebuzz dashboard | Reconfigure with correct domain + path |
 
 ---
 
-## Support and Resources
+## 10. FAQ
 
-### Easebuzz Documentation
-- [Initiate Payment API](https://docs.easebuzz.in/docs/payment-gateway/8ec545c331e6f-initiate-payment-api)
-- [Webhooks](https://docs.easebuzz.in/docs/payment-gateway/587zy3v064so6-what-are-webhooks)
-- [Transaction API V2.1](https://docs.easebuzz.in/docs/payment-gateway/6il9ej80xoydr-transaction-api-v2-1)
+**Q: Can I have more than 2 merchants in a split?**  
+Yes. Add as many labels as you need — just ensure they sum to 100.
 
-### ERPNext/Frappe Documentation
-- [EASEBUZZ_INTEGRATION.md](./EASEBUZZ_INTEGRATION.md)
-- [EASEBUZZ_SETUP.md](./EASEBUZZ_SETUP.md)
-- [EASEBUZZ_IMPLEMENTATION_SUMMARY.md](./EASEBUZZ_IMPLEMENTATION_SUMMARY.md)
+**Q: Are the split_payments_labels values percentages or INR amounts?**  
+Always **percentages**. The system converts them to actual amounts at runtime.
 
-### Getting Help
-- **Easebuzz Support:** For label configurations, account setup, API issues
-- **Internal Team:** For integration questions, configuration help
-- **GitHub Issues:** For bug reports and feature requests
+**Q: What happens if my percentages are 33.33, 33.33, 33.34 — will it work?**  
+Yes. The sum is 100.00 (within the 0.01 tolerance), and the system handles rounding automatically.
 
----
+**Q: Does the webhook endpoint work for normal (non-split) payments?**  
+Yes. The `webhook_callback` endpoint processes both. Split logic is transparent to the webhook.
 
-## Changelog
+**Q: How do I configure the webhook in the Easebuzz dashboard?**  
+Use the URL shown under *Webhook / Callback URLs* in Easebuzz Settings:  
+`https://<site>/api/method/...easebuzz_settings.webhook_callback`
 
-| Version | Date | Changes |
-|---------|------|---------|
-| 1.0 | April 1, 2026 | Initial release with split payments support |
+**Q: Can each merchant have different split configs?**  
+Yes. Each `Easebuzz Merchant` record has its own `split_payments_config`.
 
----
+**Q: What is the priority when both `split_payments_labels` and merchant config are set?**  
+API parameter wins. Order: API kwarg → merchant config → no split.
 
-**Last Updated:** April 1, 2026  
-**Document Version:** 1.0  
-**Status:** Active
+**Q: Are refunds affected by splits?**  
+Easebuzz handles refund reversal automatically proportional to the original split.

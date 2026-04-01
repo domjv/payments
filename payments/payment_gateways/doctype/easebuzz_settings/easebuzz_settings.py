@@ -367,36 +367,47 @@ Integration Request: {self.integration_request.name}"""
         udf4_val = _udf_sanitize(frappe.session.user or "Guest")
         udf5_val = _udf_sanitize(merchant_doc.name)
 
-        # Handle split payments
+        # Handle split payments — config stores percentages, we convert to actual amounts here.
+        # Priority: API kwarg 'split_payments_labels' > merchant default 'split_payments_config'.
         split_payments_json = None
         split_payments_labels = kwargs.get('split_payments_labels')
-        
+
+        raw_split_pct = None  # will hold {label: percentage} dict
         if split_payments_labels:
-            # API caller provided split configuration
-            # Validate it's a dict or JSON string
             if isinstance(split_payments_labels, str):
-                split_payments_json = split_payments_labels
+                raw_split_pct = json.loads(split_payments_labels)
             elif isinstance(split_payments_labels, dict):
-                split_payments_json = json.dumps(split_payments_labels)
+                raw_split_pct = split_payments_labels
         elif merchant_doc.get('split_payments_config'):
-            # Use merchant's default configuration
-            split_payments_json = merchant_doc.split_payments_config
-        
-        # Validate split amounts equal final_amount if splits provided
-        if split_payments_json:
+            raw_split_pct = json.loads(merchant_doc.split_payments_config)
+
+        if raw_split_pct:
             try:
-                split_data = json.loads(split_payments_json)
-                total_split = sum(float(v) for v in split_data.values())
-                # Allow small floating point differences (0.01)
+                labels = list(raw_split_pct.keys())
+                pcts = [float(raw_split_pct[l]) for l in labels]
+
+                # Convert each percentage to an actual currency amount (round to 2 dp)
+                amounts = [round(p / 100.0 * final_amount, 2) for p in pcts]
+
+                # Distribute any rounding remainder to the last label
+                remainder = round(final_amount - sum(amounts), 2)
+                amounts[-1] = round(amounts[-1] + remainder, 2)
+
+                split_amounts = {labels[i]: amounts[i] for i in range(len(labels))}
+
+                # Sanity-check: log warning if total still drifts (should never happen)
+                total_split = sum(split_amounts.values())
                 if abs(total_split - final_amount) > 0.01:
                     frappe.log_error(
                         f"Split payments total ({total_split}) doesn't match transaction amount ({final_amount}). "
                         f"Merchant: {merchant_doc.name}, Transaction: {txnid}",
                         "Easebuzz Split Payment Warning"
                     )
+
+                split_payments_json = json.dumps(split_amounts)
             except Exception as e:
                 frappe.log_error(
-                    f"Split payments validation error: {str(e)}\nMerchant: {merchant_doc.name}, Transaction: {txnid}",
+                    f"Split payments calculation error: {str(e)}\nMerchant: {merchant_doc.name}, Transaction: {txnid}",
                     "Easebuzz Split Payment Error"
                 )
 
@@ -474,10 +485,12 @@ def initiate_payment(**kwargs):
         custom_pincode (str, optional): Customer pincode
         custom_state (str, optional): Customer state
         phone (str, optional): Customer phone number
-        split_payments_labels (dict|str, optional): Split payment configuration.
-            Can be a dict like {"label_HDFC": 100, "label_ICICI": 50} or JSON string.
-            If not provided, uses merchant's default split configuration (if configured).
-            Total of all split amounts should equal the transaction amount.
+        split_payments_labels (dict|str, optional): Split payment percentages.
+            Dict (or JSON string) mapping Easebuzz-provided labels to percentage shares.
+            Example: {"label_platform": 10, "label_vendor_a": 55, "label_vendor_b": 35}
+            Percentages must sum to 100.  Supports any number of labels (≥2).
+            Actual INR amounts are computed from the final transaction amount at runtime.
+            If omitted, the merchant's stored split_payments_config is used (if set).
         
     Returns:
         dict: Payment initiation data including:

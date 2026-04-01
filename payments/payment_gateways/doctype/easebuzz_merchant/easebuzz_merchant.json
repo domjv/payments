@@ -85,10 +85,10 @@
    "label": "Split Payments Configuration"
   },
   {
-   "description": "JSON configuration for split payments. Example: {\"label_HDFC\": 100, \"label_ICICI\": 50}. Labels must be provided by Easebuzz team. Leave empty if not using split payments.",
+   "description": "JSON object mapping Easebuzz-provided labels to percentage splits. Percentages must sum to 100 and at least 2 labels are required. Example for 3-way split: {\"label_platform\": 10, \"label_vendor_a\": 55, \"label_vendor_b\": 35}. Labels must be provided by the Easebuzz team. Leave empty if not using split payments.",
    "fieldname": "split_payments_config",
    "fieldtype": "Long Text",
-   "label": "Split Payments Labels"
+   "label": "Split Payments (% per label)"
   }
  ],
  "grid_page_length": 50,

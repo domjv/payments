@@ -88,76 +88,109 @@ When a payment is initiated:
 
 ## Split Payments
 
-**NEW:** Split payments allow a single transaction to be automatically distributed across multiple accounts or entities.
+Split payments automatically distribute a single transaction among multiple Easebuzz labels (sub-accounts).  
+**Configuration uses percentages** — the system converts them to actual INR amounts at payment time.
 
-### Overview
+### Flow
 
-Split payments is useful for:
-- **Marketplace platforms**: Split between platform and vendors
-- **Multi-tenant systems**: Distribute fees to different business units
-- **Commission-based systems**: Automatic revenue sharing
+```mermaid
+flowchart LR
+    A[initiate_payment called] --> B{split_payments_labels\nin API call?}
+    B -- Yes --> C[Use those percentages]
+    B -- No --> D{split_payments_config\nin Merchant?}
+    D -- Yes --> E[Use merchant percentages]
+    D -- No --> F[No split — full amount to merchant]
+    C --> G[pct ÷ 100 × final_amount per label]
+    E --> G
+    G --> H[Rounding adjusted on last label]
+    H --> I[split_payments JSON added to API payload]
+```
 
 ### Configuration
 
-#### Method 1: Merchant Default Configuration
+#### Method 1: Merchant default (recommended)
 
-Configure default splits in the Easebuzz Merchant document:
-
-1. Navigate to **Payment Gateways > Easebuzz Merchant**
-2. Open or create a merchant
-3. Scroll to **Split Payments Configuration** section
-4. Add JSON configuration with labels provided by Easebuzz:
+In **Easebuzz Merchant → Split Payments Configuration**, enter a JSON object where values are **percentages** that must sum to 100:
 
 ```json
 {
-  "label_HDFC": 150,
-  "label_ICICI": 100
+  "label_platform": 10,
+  "label_vendor_a": 55,
+  "label_vendor_b": 35
 }
 ```
 
-**Important:** 
-- Labels must be exactly as provided by Easebuzz support team
-- Total amounts should match your typical transaction amounts
-- JSON format is validated on save
+All payments through this merchant will use these splits unless overridden via API.
 
-#### Method 2: Dynamic Per-Transaction Splits
+#### Method 2: Per-transaction override
 
-Pass `split_payments_labels` in the API call to override merchant defaults:
-
-```json
-{
-  "amount": 250,
-  "split_payments_labels": {
-    "label_platform": 25,
-    "label_vendor": 225
-  }
-}
-```
-
-### Example: Marketplace with 10% Commission
+Pass `split_payments_labels` (percentages) in the `initiate_payment` call:
 
 ```json
 {
   "amount": 1000,
-  "reference_doctype": "Sales Invoice",
-  "reference_docname": "SINV-001",
-  "payer_email": "customer@example.com",
-  "payer_name": "CUST-001",
   "split_payments_labels": {
-    "label_platform": 100,
-    "label_vendor_xyz": 900
+    "label_platform": 10,
+    "label_vendor_a": 55,
+    "label_vendor_b": 35
   }
 }
 ```
 
-### Validation Rules
+### Validation rules
 
-- ✅ Labels must be non-empty strings
-- ✅ Amounts must be numeric and positive
-- ✅ Total should equal transaction amount (warning logged if not)
-- ✅ JSON format must be valid
+| Rule | Detail |
+|------|--------|
+| Valid JSON object | Must be `{…}` |
+| ≥ 2 labels | At least two entries |
+| Each pct > 0 and ≤ 100 | No zero/negative shares |
+| Sum = 100 (±0.01) | Handles `33.33 + 33.33 + 33.34` |
 
-**For complete details, see:** [EASEBUZZ_SPLIT_PAYMENTS.md](./EASEBUZZ_SPLIT_PAYMENTS.md)
+**Full guide:** [EASEBUZZ_SPLIT_PAYMENTS.md](./EASEBUZZ_SPLIT_PAYMENTS.md)
+
+---
+
+## Webhooks & Callbacks
+
+Easebuzz sends payment outcomes via two mechanisms:
+
+| Mechanism | Endpoint | When |
+|-----------|----------|------|
+| **Redirect callback** (surl/furl) | `verify_transaction?merchant=<name>` | Browser redirect after payment |
+| **Webhook** (server-side POST) | `webhook_callback` | Async, server-to-server |
+
+Both endpoints handle **normal and split payments identically** — no extra setup needed.
+
+### Webhook URL to configure in Easebuzz dashboard
+
+```
+https://<your-site>/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.webhook_callback
+```
+
+Append `?merchant=<merchant_name>` for multi-merchant setups.
+
+### Webhook flow
+
+```mermaid
+sequenceDiagram
+    participant EB as Easebuzz
+    participant ERPNext as ERPNext
+
+    EB->>ERPNext: POST webhook_callback (form data)
+    ERPNext->>ERPNext: Verify SHA-512 hash
+    ERPNext->>ERPNext: Extract token from udf3
+    ERPNext->>ERPNext: Update Integration Request
+    ERPNext->>ERPNext: on_payment_authorized(reference_doc)
+    ERPNext-->>EB: 200 OK + JSON { success, status, redirect_to }
+```
+
+### Response hash verification sequence
+
+```
+salt|status|udf10|udf9|udf8|udf7|udf6|udf5|udf4|udf3|udf2|udf1|email|firstname|productinfo|amount|txnid|key
+```
+
+Implemented in `verify_response_hash()` in `easebuzz_utils.py`.
 
 ---
 
@@ -189,7 +222,7 @@ All endpoints are available at: `https://your-erpnext-site.com/api/method/paymen
 | `custom_merchant_name` | string | No | Specific merchant to use |
 | `custom_pincode` | string | No | Customer pincode |
 | `custom_state` | string | No | Customer state |
-| `split_payments_labels` | dict/string | No | Split payment configuration (overrides merchant default). See [Split Payments](#split-payments) |
+| `split_payments_labels` | dict/string | No | Split payment **percentages** (overrides merchant default). Dict or JSON string mapping Easebuzz labels to % shares that sum to 100. See [Split Payments](#split-payments) |
 
 #### Response
 

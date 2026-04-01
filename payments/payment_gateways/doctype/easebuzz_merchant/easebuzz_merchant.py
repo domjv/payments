@@ -37,36 +37,55 @@ class EasebuzzMerchant(Document):
 			)
 	
 	def validate_split_payments_config(self):
-		"""Validate split payments JSON format"""
+		"""Validate split payments percentage configuration.
+
+		Each entry is a label → percentage (e.g. {"label_HDFC": 60, "label_ICICI": 40}).
+		Rules:
+		  - Must be valid JSON object (dict)
+		  - Labels must be non-empty strings
+		  - Each percentage must be a positive number > 0 and <= 100
+		  - The percentages must sum to exactly 100
+		  - At least 2 labels required when any configuration is supplied
+		"""
 		if not self.split_payments_config:
 			return
-		
+
 		try:
 			split_data = json.loads(self.split_payments_config)
-			
-			# Validate format: must be a dictionary
+
 			if not isinstance(split_data, dict):
 				frappe.throw(_("Split payments configuration must be a JSON object (dictionary)."))
-			
-			# Validate each label and amount
-			for label, amount in split_data.items():
-				# Validate label format (should be alphanumeric with underscores)
-				if not isinstance(label, str) or not label:
+
+			if len(split_data) < 2:
+				frappe.throw(_("Split payments configuration must have at least 2 labels."))
+
+			total_pct = 0
+			for label, pct in split_data.items():
+				if not isinstance(label, str) or not label.strip():
 					frappe.throw(_("Split payment labels must be non-empty strings."))
-				
-				# Validate amount is numeric
-				if not isinstance(amount, (int, float)):
-					frappe.throw(_("Split payment amount for label '{0}' must be numeric.").format(label))
-				
-				# Validate amount is positive
-				if amount <= 0:
-					frappe.throw(_("Split payment amount for label '{0}' must be positive.").format(label))
-		
+
+				if not isinstance(pct, (int, float)):
+					frappe.throw(_("Split payment percentage for label '{0}' must be numeric.").format(label))
+
+				if pct <= 0 or pct > 100:
+					frappe.throw(
+						_("Split payment percentage for label '{0}' must be between 0 (exclusive) and 100.").format(label)
+					)
+
+				total_pct += pct
+
+			# Allow tiny floating-point rounding (e.g. 33.33 + 33.33 + 33.34 = 100.00)
+			if abs(total_pct - 100) > 0.01:
+				frappe.throw(
+					_("Split payment percentages must sum to 100. Current total: {0:.2f}").format(total_pct)
+				)
+
 		except json.JSONDecodeError as e:
 			frappe.throw(_("Invalid JSON format in split payments configuration: {0}").format(str(e)))
+		except frappe.ValidationError:
+			raise
 		except Exception as e:
-			if "throw" not in str(e.__class__):
-				frappe.throw(_("Error validating split payments configuration: {0}").format(str(e)))
+			frappe.throw(_("Error validating split payments configuration: {0}").format(str(e)))
 
 
 def get_default_merchant():
