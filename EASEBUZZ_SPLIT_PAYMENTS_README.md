@@ -81,11 +81,11 @@ This implementation adds **split payments** support to the Easebuzz payment gate
 
 **Option 1: Merchant Default (Recommended for Consistent Splits)**
 
-Configure in Easebuzz Merchant:
+Configure in Easebuzz Merchant (values are **percentages**, must sum to 100):
 ```json
 {
-  "label_HDFC": 150,
-  "label_ICICI": 100
+  "label_HDFC": 60,
+  "label_ICICI": 40
 }
 ```
 
@@ -93,13 +93,13 @@ All payments through this merchant automatically use these splits.
 
 **Option 2: Dynamic Per-Transaction (For Variable Splits)**
 
-Pass in API call:
+Pass percentages in API call:
 ```json
 {
   "amount": 250,
   "split_payments_labels": {
-    "label_platform": 25,
-    "label_vendor": 225
+    "label_platform": 10,
+    "label_vendor": 90
   }
 }
 ```
@@ -113,9 +113,9 @@ Pass in API call:
 ### Validation
 
 - ✅ JSON format validated on save
-- ✅ Labels must be non-empty strings
-- ✅ Amounts must be numeric and positive
-- ✅ Total should equal transaction amount (warning logged)
+- ✅ Values are percentages — must be numeric, > 0, ≤ 100
+- ✅ Percentages must sum to 100 (±0.01 tolerance)
+- ✅ At least 2 labels required
 - ✅ Server-side validation (no client trust)
 
 ---
@@ -126,11 +126,11 @@ Pass in API call:
 
 **Endpoint:** `/api/method/...easebuzz_settings.initiate_payment`
 
-**Type:** `dict` or `str` (JSON string)
+**Type:** `dict` or `str` (JSON string) — values are **percentages**
 
 **Required:** No (optional)
 
-**Example:**
+**Example (3-way split):**
 ```json
 {
   "amount": 1000,
@@ -139,11 +139,14 @@ Pass in API call:
   "payer_email": "customer@example.com",
   "payer_name": "CUST-001",
   "split_payments_labels": {
-    "label_platform": 100,
-    "label_vendor": 900
+    "label_platform": 10,
+    "label_vendor_a": 55,
+    "label_vendor_b": 35
   }
 }
 ```
+
+Easebuzz receives computed amounts: `{"label_platform": 100.0, "label_vendor_a": 550.0, "label_vendor_b": 350.0}`
 
 ---
 
