@@ -67,7 +67,8 @@ from payments.payment_gateways.doctype.easebuzz_settings.easebuzz_utils import (
     verify_response_hash,
     initiate_payment_api,
     transaction_api,
-    refund_api
+    refund_api,
+    compute_split_payments,
 )
 from payments.utils import create_payment_gateway
 
@@ -391,13 +392,17 @@ Integration Request: {self.integration_request.name}"""
             'country': 'India',
             'zipcode': zipcode,
         }
-        
+
+        # Build split_payments from merchant config (can be overridden per-request via kwargs)
+        split_payments = kwargs.get('split_payments') or compute_split_payments(merchant_doc, final_amount)
+
         return {
             "payment_data": payment_data,
             "merchant_key": merchant_doc.get('merchant_key'),
             "salt": merchant_doc.get_password(fieldname="salt", raise_exception=False),
             "merchant_name": merchant_doc.name,
-            "environment": merchant_environment
+            "environment": merchant_environment,
+            "split_payments": split_payments,
         }
 
     def get_api_url(self, environment=None):
@@ -473,13 +478,14 @@ def initiate_payment(**kwargs):
             integration_request.name,
             **kwargs
         )
-        
+
         # Call Easebuzz API to initiate payment
         result = initiate_payment_api(
             payment_request_data['payment_data'],
             payment_request_data['merchant_key'],
             payment_request_data['salt'],
-            payment_request_data['environment']
+            payment_request_data['environment'],
+            split_payments=payment_request_data.get('split_payments'),
         )
         
         frappe.log_error(f"Initiate payment result: {result}", "Easebuzz Payment Initiation Error")

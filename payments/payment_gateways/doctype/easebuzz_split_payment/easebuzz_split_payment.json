@@ -1,0 +1,51 @@
+{
+ "actions": [],
+ "creation": "2025-04-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "label",
+  "split_type",
+  "split_value"
+ ],
+ "fields": [
+  {
+   "fieldname": "label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Label",
+   "description": "Easebuzz Easy Split sub-merchant label provided by Easebuzz",
+   "reqd": 1
+  },
+  {
+   "fieldname": "split_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Split Type",
+   "options": "Percentage\nFixed",
+   "default": "Percentage",
+   "reqd": 1
+  },
+  {
+   "fieldname": "split_value",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Split Value",
+   "description": "Percentage (0-100) or fixed amount in INR",
+   "reqd": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2025-04-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Payment Gateways",
+ "name": "Easebuzz Split Payment",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

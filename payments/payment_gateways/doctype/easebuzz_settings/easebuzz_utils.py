@@ -48,20 +48,26 @@ def generate_hash(data, salt):
 
 def verify_response_hash(response_data, salt):
 	"""
-	Verify the hash received in the response from Easebuzz
-	
+	Verify the hash received in the response from Easebuzz.
+
+	Reverse hash sequence (per Easebuzz documentation):
+	salt|status|udf10|udf9|udf8|udf7|udf6|udf5|udf4|udf3|udf2|udf1|email|firstname|productinfo|amount|txnid|key
+
 	Args:
 		response_data (dict): Response data from Easebuzz
 		salt (str): Salt key from Easebuzz
-		
+
 	Returns:
 		bool: True if hash is valid, False otherwise
 	"""
-	# Hash sequence for response: salt|status|||||||udf5|udf4|udf3|udf2|udf1|email|firstname|productinfo|amount|txnid|key
 	hash_sequence = [
 		salt,
 		response_data.get('status', ''),
-		'', '', '', '', '',  # Empty fields
+		response_data.get('udf10', ''),
+		response_data.get('udf9', ''),
+		response_data.get('udf8', ''),
+		response_data.get('udf7', ''),
+		response_data.get('udf6', ''),
 		response_data.get('udf5', ''),
 		response_data.get('udf4', ''),
 		response_data.get('udf3', ''),
@@ -74,12 +80,12 @@ def verify_response_hash(response_data, salt):
 		response_data.get('txnid', ''),
 		response_data.get('key', '')
 	]
-	
+
 	hash_string = '|'.join(str(x) for x in hash_sequence)
 	calculated_hash = hashlib.sha512(hash_string.encode('utf-8')).hexdigest()
-	
+
 	received_hash = response_data.get('hash', '')
-	
+
 	return calculated_hash == received_hash
 
 
@@ -111,23 +117,31 @@ def get_api_url(environment, endpoint):
 	return f"{base_url}{endpoint_path}"
 
 
-def initiate_payment_api(payment_data, merchant_key, salt, environment):
+def initiate_payment_api(payment_data, merchant_key, salt, environment, split_payments=None):
 	"""
 	Call Easebuzz Initiate Payment API
-	
+
 	Args:
 		payment_data (dict): Payment data including txnid, amount, firstname, etc.
 		merchant_key (str): Merchant key from Easebuzz
 		salt (str): Salt from Easebuzz
 		environment (str): 'Test' or 'Production'
-		
+		split_payments (list | None): Optional list of split payment dicts, each with
+		    ``label`` (str) and ``split_amount`` (str) keys.  When provided the
+		    JSON-serialised value is attached as ``split_payments`` in the POST body
+		    **before** the hash is computed so it is included in the hash.
+
 	Returns:
 		dict: API response with status and payment link
 	"""
 	try:
 		# Add merchant key to data
 		payment_data['key'] = merchant_key
-		
+
+		# Attach split_payments before hashing so it is covered by the hash
+		if split_payments:
+			payment_data['split_payments'] = json.dumps(split_payments)
+
 		# Generate hash
 		payment_data['hash'] = generate_hash(payment_data, salt)
 		
@@ -247,19 +261,49 @@ def refund_api(refund_data, merchant_key, salt, environment):
 		}
 
 
+def compute_split_payments(merchant_doc, total_amount):
+	"""
+	Compute the split_payments list from a merchant's split payment rules.
+
+	Easebuzz Easy Split expects a JSON array where each element has:
+	    { "label": "<sub-merchant-label>", "split_amount": "<amount as string>" }
+
+	Fixed-type rows use their value directly.  Percentage-type rows compute
+	``round(total_amount * split_value / 100, 2)``.
+
+	Returns ``None`` when the merchant has no split_payment rows configured.
+
+	Args:
+		merchant_doc: Easebuzz Merchant document (with ``split_payments`` child table)
+		total_amount (float): Total transaction amount in INR
+
+	Returns:
+		list | None: List of split dicts or None
+	"""
+	rows = getattr(merchant_doc, 'split_payments', None)
+	if not rows:
+		return None
+
+	result = []
+	for row in rows:
+		split_type = row.get('split_type') or 'Percentage'
+		split_value = float(row.get('split_value') or 0)
+		label = (row.get('label') or '').strip()
+		if not label:
+			continue
+
+		if split_type == 'Fixed':
+			amount = round(split_value, 2)
+		else:
+			amount = round(total_amount * split_value / 100, 2)
+
+		result.append({'label': label, 'split_amount': str(amount)})
+
+	return result if result else None
+
+
 @frappe.whitelist()
 def test_connection(merchant_key, salt, environment):
-	"""
-	Test connection to Easebuzz
-	
-	Args:
-		merchant_key: The merchant key from Easebuzz
-		salt: The salt from Easebuzz
-		environment: 'Test' or 'Production'
-		
-	Returns:
-		dict: Result of the test connection
-	"""
 	try:
 		# Test hash generation
 		test_data = {
