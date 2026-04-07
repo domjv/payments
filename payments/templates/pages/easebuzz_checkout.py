@@ -37,6 +37,7 @@ def get_context(context):
 			request_data["merchant_key"],
 			request_data["salt"],
 			request_data["environment"],
+			split_payments=request_data.get("split_payments"),
 		)
 
 		if result.get("success") and result.get("data"):

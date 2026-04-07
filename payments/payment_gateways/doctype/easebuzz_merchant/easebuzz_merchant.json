@@ -14,7 +14,9 @@
   "column_break_itky",
   "bank_account",
   "debtors_account",
-  "company"
+  "company",
+  "split_payments_section",
+  "split_payments"
  ],
  "fields": [
   {
@@ -75,6 +77,19 @@
   {
    "fieldname": "column_break_itky",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "split_payments_section",
+   "fieldtype": "Section Break",
+   "label": "Easy Split Payments",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "split_payments",
+   "fieldtype": "Table",
+   "label": "Split Payment Rules",
+   "options": "Easebuzz Split Payment",
+   "description": "Define how payments to this merchant should be split across Easebuzz Easy Split sub-merchants. Leave empty to disable split payments."
   }
  ],
  "grid_page_length": 50,
