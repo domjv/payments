@@ -117,6 +117,48 @@ def get_api_url(environment, endpoint):
 	return f"{base_url}{endpoint_path}"
 
 
+def _normalize_split_payments_for_api(split_payments):
+	"""
+	Build the Easebuzz ``split_payments`` POST field value.
+
+	Per Easebuzz: when split payment is enabled for the merchant, this parameter is
+	mandatory. Expected value is a JSON **object** mapping each split bank account
+	label to the split amount in Rs::
+
+	    {"label_of_bank1": split_amount_in_rs, "label_of_bank2": split_amount_in_rs}
+
+	Example: ``{ "Easebuzztest 1": 11.0, "Easebuzztest 2": 1.0 }``
+
+	We send the compact JSON string (labels may contain spaces; ``json.dumps`` quotes keys).
+
+	Accepts:
+	- ``dict`` mapping bank label (str) to amount in Rs (float/int)
+	- legacy ``list`` of ``{"label": "...", "split_amount": "..."}`` rows from child table
+	"""
+	if not split_payments:
+		return None
+	if isinstance(split_payments, dict):
+		mapping = {str(k): float(v) for k, v in split_payments.items()}
+	elif isinstance(split_payments, list):
+		mapping = {}
+		for row in split_payments:
+			if not isinstance(row, dict):
+				continue
+			label = (row.get("label") or "").strip()
+			if not label:
+				continue
+			try:
+				amt = float(row.get("split_amount") or 0)
+			except (TypeError, ValueError):
+				continue
+			mapping[label] = round(mapping.get(label, 0) + amt, 2)
+	else:
+		return None
+	if not mapping:
+		return None
+	return json.dumps(mapping, separators=(",", ":"))
+
+
 def initiate_payment_api(payment_data, merchant_key, salt, environment, split_payments=None):
 	"""
 	Call Easebuzz Initiate Payment API
@@ -126,10 +168,10 @@ def initiate_payment_api(payment_data, merchant_key, salt, environment, split_pa
 		merchant_key (str): Merchant key from Easebuzz
 		salt (str): Salt from Easebuzz
 		environment (str): 'Test' or 'Production'
-		split_payments (list | None): Optional list of split payment dicts, each with
-		    ``label`` (str) and ``split_amount`` (str) keys.  When provided the
-		    JSON-serialised value is attached as ``split_payments`` in the POST body
-		    **before** the hash is computed so it is included in the hash.
+		split_payments (dict | list | None): Optional object ``{bank_label: amount_rs}``
+		    (per Easebuzz), or legacy list of ``{"label", "split_amount"}`` rows.
+		    Serialized to a JSON string in the POST body **before** the hash is computed.
+		    Mandatory when split payment is enabled on the merchant account.
 
 	Returns:
 		dict: API response with status and payment link
@@ -139,8 +181,9 @@ def initiate_payment_api(payment_data, merchant_key, salt, environment, split_pa
 		payment_data['key'] = merchant_key
 
 		# Attach split_payments before hashing so it is covered by the hash
-		if split_payments:
-			payment_data['split_payments'] = json.dumps(split_payments)
+		split_payload = _normalize_split_payments_for_api(split_payments)
+		if split_payload:
+			payment_data['split_payments'] = split_payload
 
 		# Generate hash
 		payment_data['hash'] = generate_hash(payment_data, salt)
@@ -263,13 +306,15 @@ def refund_api(refund_data, merchant_key, salt, environment):
 
 def compute_split_payments(merchant_doc, total_amount):
 	"""
-	Compute the split_payments list from a merchant's split payment rules.
+	Compute the split_payments map from a merchant's split payment rules.
 
-	Easebuzz Easy Split expects a JSON array where each element has:
-	    { "label": "<sub-merchant-label>", "split_amount": "<amount as string>" }
+	Easebuzz API expects ``split_payments`` as a JSON object: each key is the
+	mapped split bank account **label**, each value is the split amount in Rs
+	(e.g. ``{ "Easebuzztest 1": 11.0, "Easebuzztest 2": 1.0 }``).
 
-	Fixed-type rows use their value directly.  Percentage-type rows compute
-	``round(total_amount * split_value / 100, 2)``.
+	Fixed-type rows use their value directly. Percentage-type rows compute
+	``round(total_amount * split_value / 100, 2)``. Duplicate labels in the child
+	table are summed.
 
 	Returns ``None`` when the merchant has no split_payment rows configured.
 
@@ -278,13 +323,13 @@ def compute_split_payments(merchant_doc, total_amount):
 		total_amount (float): Total transaction amount in INR
 
 	Returns:
-		list | None: List of split dicts or None
+		dict[str, float] | None: ``label_of_bank`` -> ``split_amount_in_rs`` for the API
 	"""
 	rows = getattr(merchant_doc, 'split_payments', None)
 	if not rows:
 		return None
 
-	result = []
+	result = {}
 	for row in rows:
 		split_type = row.get('split_type') or 'Percentage'
 		split_value = float(row.get('split_value') or 0)
@@ -297,7 +342,7 @@ def compute_split_payments(merchant_doc, total_amount):
 		else:
 			amount = round(total_amount * split_value / 100, 2)
 
-		result.append({'label': label, 'split_amount': str(amount)})
+		result[label] = round(result.get(label, 0) + amount, 2)
 
 	return result if result else None
 
