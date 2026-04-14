@@ -515,7 +515,8 @@ def initiate_payment(**kwargs):
                 "payment_token": integration_request.name,
                 "payment_url": result['data'],
                 "txnid": payment_request_data['payment_data']['txnid'],
-                "merchant_name": payment_request_data.get('merchant_name')
+                "merchant_name": payment_request_data.get('merchant_name'),
+                "company": kwargs.get("company"),
             }
         else:
             return {
@@ -560,7 +561,8 @@ def check_payment_status(integration_request_name):
             "reference_doctype": integration_request.reference_doctype,
             "reference_docname": integration_request.reference_docname,
             "amount": data.get("amount"),
-            "currency": data.get("currency")
+            "currency": data.get("currency"),
+            "company": data.get("company"),
         }
         
     except frappe.DoesNotExistError:

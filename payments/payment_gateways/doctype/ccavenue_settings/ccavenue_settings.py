@@ -398,13 +398,15 @@ def initiate_payment(**kwargs):
         return {
             "success": True,
             "payment_token": integration_request.name,
+            "payment_url": payment_url,
             "encrypted_data": payment_data['encRequest'],
             "access_code": payment_data['access_code'],
             "merchant_id": payment_data['merchant_id'],
             "merchant_name": payment_data.get('merchant_name'),
             "api_url": api_url,
             "order_id": integration_request.name,
-            "iframe_url": f"{api_url}&merchant_id={payment_data['merchant_id']}&encRequest={payment_data['encRequest']}&access_code={payment_data['access_code']}"
+            "iframe_url": f"{api_url}&merchant_id={payment_data['merchant_id']}&encRequest={payment_data['encRequest']}&access_code={payment_data['access_code']}",
+            "company": kwargs.get("company"),
         }
     except Exception as e:
         frappe.log_error(f"CCAvenue initiate_payment error: {str(e)}\n{frappe.get_traceback()}", "CCAvenue Payment Initiation Error")
@@ -447,6 +449,7 @@ def check_payment_status(integration_request_name):
             "reference_docname": integration_request.reference_docname,
             "amount": data.get("amount"),
             "currency": data.get("currency"),
+            "company": data.get("company"),
         }
     except frappe.DoesNotExistError:
         return {
