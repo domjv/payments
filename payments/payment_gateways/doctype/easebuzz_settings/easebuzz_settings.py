@@ -395,15 +395,38 @@ Integration Request: {self.integration_request.name}"""
 
         # Build split_payments from merchant config (can be overridden per-request via kwargs)
         split_payments = kwargs.get('split_payments') or compute_split_payments(merchant_doc, final_amount)
+        is_split_enabled = bool(split_payments)
 
-        return {
+        # prefer merchant creds/env (sub-merchant setup), fallback to global.
+        global_key = (self.merchant_key or "").strip()
+        global_salt = (self.get_password(fieldname="salt", raise_exception=False) or "").strip()
+        global_env = self.environment or "Test"
+
+        merchant_key = (merchant_doc.get("merchant_key") or "").strip()
+        merchant_salt = (merchant_doc.get_password(fieldname="salt", raise_exception=False) or "").strip()
+
+        selected_key = merchant_key or global_key
+        selected_salt = merchant_salt or global_salt
+        selected_env = merchant_environment or global_env
+        credential_source = "merchant" if merchant_key and merchant_salt else "global-fallback"
+    
+        if not selected_key or not selected_salt:
+            frappe.throw(
+                _(
+                    "Easebuzz credentials are missing. Merchant: {0}, Source: {1}. Please set merchant key and salt."
+                ).format(merchant_doc.name, credential_source)
+            )
+
+        response = {
             "payment_data": payment_data,
-            "merchant_key": merchant_doc.get('merchant_key'),
-            "salt": merchant_doc.get_password(fieldname="salt", raise_exception=False),
+            "merchant_key": selected_key,
+            "salt": selected_salt,
             "merchant_name": merchant_doc.name,
-            "environment": merchant_environment,
-            "split_payments": split_payments,
+            "environment": selected_env,
         }
+        if is_split_enabled:
+            response["split_payments"] = split_payments
+        return response
 
     def get_api_url(self, environment=None):
         """Get the Easebuzz API URL based on environment"""
@@ -450,8 +473,6 @@ def initiate_payment(**kwargs):
             - txnid: Transaction ID
     """
     try:
-        # Debug log line
-        frappe.log_error(f"Initiate payment: {kwargs}", "Easebuzz Payment Initiation Error")
         # Validate required parameters
         required_params = ['amount', 'reference_doctype', 'reference_docname', 'payer_email', 'payer_name']
         
@@ -488,7 +509,6 @@ def initiate_payment(**kwargs):
             split_payments=payment_request_data.get('split_payments'),
         )
         
-        frappe.log_error(f"Initiate payment result: {result}", "Easebuzz Payment Initiation Error")
         if result.get('success'):
             return {
                 "success": True,

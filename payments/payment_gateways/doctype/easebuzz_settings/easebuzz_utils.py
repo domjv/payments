@@ -177,6 +177,15 @@ def initiate_payment_api(payment_data, merchant_key, salt, environment, split_pa
 		dict: API response with status and payment link
 	"""
 	try:
+		merchant_key = (merchant_key or "").strip()
+		salt = (salt or "").strip()
+		if not merchant_key or not salt:
+			return {
+				'success': False,
+				'status': 0,
+				'message': 'Easebuzz merchant key/salt is missing'
+			}
+
 		# Add merchant key to data
 		payment_data['key'] = merchant_key
 
@@ -190,7 +199,6 @@ def initiate_payment_api(payment_data, merchant_key, salt, environment, split_pa
 		
 		# Get API URL
 		api_url = get_api_url(environment, 'initiate')
-		
 		# Make API request
 		response = requests.post(api_url, data=payment_data, timeout=30)
 		response.raise_for_status()
@@ -333,8 +341,21 @@ def compute_split_payments(merchant_doc, total_amount):
 	for row in rows:
 		split_type = row.get('split_type') or 'Percentage'
 		split_value = float(row.get('split_value') or 0)
+		split_type = row.get('split_type') or 'Percentage'
+		split_value = float(row.get('split_value') or 0)
 		label = (row.get('label') or '').strip()
-		if not label:
+		split_type = row.get('split_type')
+		raw_split_value = row.get('split_value')
+
+		# Send split payments only for fully configured rows.
+		if not label or not split_type or raw_split_value in (None, ''):
+			continue
+		if split_type not in ('Fixed', 'Percentage'):
+			continue
+
+		try:
+			split_value = float(raw_split_value)
+		except (TypeError, ValueError):
 			continue
 
 		if split_type == 'Fixed':
@@ -343,7 +364,7 @@ def compute_split_payments(merchant_doc, total_amount):
 			amount = round(total_amount * split_value / 100, 2)
 
 		result[label] = round(result.get(label, 0) + amount, 2)
-
+	
 	return result if result else None
 
 
