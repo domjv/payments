@@ -720,3 +720,297 @@ def convert_rupee_to_paisa(**kwargs):
 	for addon in kwargs.get("addons"):
 		addon["item"]["amount"] *= 100
 	frappe.conf.converted_rupee_to_paisa = True
+
+
+# ----------------------------------------------------------------------
+# External-frontend API  (mirrors CCAvenue / Easebuzz contract)
+# ----------------------------------------------------------------------
+
+@frappe.whitelist(allow_guest=True)
+def initiate_payment(**kwargs):
+	"""
+	Initiate a Razorpay payment from an external frontend (React/Next.js app).
+
+	Unlike CCAvenue/Easebuzz which redirect the browser to a hosted page,
+	Razorpay uses an in-page JavaScript modal.  This endpoint creates a
+	Razorpay *order* on the server side and returns the credentials/order
+	details needed for the frontend to open the Checkout.js modal.
+
+	Required kwargs
+	---------------
+	amount            float   Payment amount (in major currency units, e.g. INR)
+	reference_doctype str     ERPNext doctype being paid (e.g. "Sales Invoice")
+	reference_docname str     ERPNext document name
+	payer_email       str     Payer e-mail address
+	payer_name        str     Customer ID or display name
+
+	Optional kwargs
+	---------------
+	currency          str     ISO currency code (default: "INR")
+	company           str     Company name – drives merchant selection
+	custom_merchant_name str  Explicit Razorpay Merchant record name
+	description       str     Payment description
+	custom_pincode    str     Customer pincode (stored in notes)
+	custom_state      str     Customer state (stored in notes)
+	phone             str     Customer phone (stored in notes)
+
+	Returns
+	-------
+	{
+	    "success": True,
+	    "payment_token": "<integration_request_name>",
+	    "order_id":      "<razorpay_order_id>",
+	    "api_key":       "<razorpay_api_key>",       # for Checkout.js
+	    "amount":        <amount_in_paise>,
+	    "currency":      "INR",
+	    "merchant_name": "<merchant_record_name>",
+	    "company":       "<company>",
+	    "environment":   "Test|Production",
+	    "prefill": {
+	        "name":   "<payer_name>",
+	        "email":  "<payer_email>",
+	        "contact": "<phone>"
+	    }
+	}
+	"""
+	try:
+		required_params = ["amount", "reference_doctype", "reference_docname", "payer_email", "payer_name"]
+		for param in required_params:
+			if not kwargs.get(param):
+				return {"success": False, "error": f"Missing required parameter: {param}"}
+
+		kwargs.setdefault("currency", "INR")
+		kwargs.setdefault("payment_gateway", "Razorpay")
+
+		settings = frappe.get_doc("Razorpay Settings")
+		order = settings.create_order(**kwargs)
+
+		integration_request_name = order.get("integration_request")
+		if not integration_request_name:
+			return {"success": False, "error": "Failed to create integration request"}
+
+		# Resolve credentials to get api_key and environment for the frontend
+		company = kwargs.get("company")
+		merchant_name = kwargs.get("custom_merchant_name")
+		creds = settings.get_credentials(
+			data=kwargs, company=company, merchant_name=merchant_name
+		)
+
+		# Get customer details for Checkout.js prefill
+		customer_name = kwargs.get("payer_name")
+		phone = kwargs.get("phone", "")
+		if customer_name and frappe.db.exists("Customer", customer_name) and not phone:
+			phone = frappe.db.get_value("Customer", customer_name, "mobile_no") or ""
+
+		return {
+			"success": True,
+			"payment_token": integration_request_name,
+			"order_id": order.get("id"),
+			"api_key": creds.api_key,
+			"amount": order.get("amount"),  # already in paise
+			"currency": order.get("currency", kwargs.get("currency", "INR")),
+			"merchant_name": creds.get("merchant_name"),
+			"company": company or "",
+			"environment": creds.get("environment", "Test"),
+			"prefill": {
+				"name": customer_name or "",
+				"email": kwargs.get("payer_email", ""),
+				"contact": phone,
+			},
+		}
+
+	except Exception as e:
+		frappe.log_error(
+			f"Razorpay initiate_payment error: {str(e)}\n{frappe.get_traceback()}",
+			"Razorpay Payment Initiation Error",
+		)
+		return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist(allow_guest=True)
+def verify_payment(razorpay_payment_id, razorpay_order_id, razorpay_signature, token):
+	"""
+	Verify a completed Razorpay payment and trigger ERPNext authorization.
+
+	Called by the external frontend after the Checkout.js modal fires the
+	``payment.success`` event.  Verifies the HMAC-SHA256 signature, restores
+	the Frappe user session, updates the Integration Request and calls
+	``authorize_payment()`` – identical to what CCAvenue/Easebuzz do in
+	their ``verify_transaction`` endpoints.
+
+	Parameters
+	----------
+	razorpay_payment_id  str  ``razorpay_payment_id`` from Checkout.js handler
+	razorpay_order_id    str  ``razorpay_order_id`` from Checkout.js handler
+	razorpay_signature   str  ``razorpay_signature`` from Checkout.js handler
+	token                str  Integration Request name (``payment_token`` from
+	                          the ``initiate_payment`` response)
+
+	Returns
+	-------
+	{
+	    "success": True,
+	    "status": "<integration_request_status>",
+	    "payment_id": "<razorpay_payment_id>",
+	    "redirect_to": "<url>",
+	    "reference_doctype": "...",
+	    "reference_docname": "..."
+	}
+	"""
+	try:
+		integration_request = frappe.get_doc("Integration Request", token)
+
+		# Duplicate-prevention: skip if already processed
+		if integration_request.status in ("Completed", "Authorized"):
+			frappe.logger().info(
+				f"Razorpay verify_payment: {token} already processed "
+				f"with status {integration_request.status}. Skipping."
+			)
+			data = json.loads(integration_request.data) if integration_request.data else {}
+			return {
+				"success": True,
+				"message": "Payment already processed",
+				"status": integration_request.status,
+				"payment_id": razorpay_payment_id,
+				"reference_doctype": data.get("reference_doctype"),
+				"reference_docname": data.get("reference_docname"),
+			}
+
+		data = json.loads(integration_request.data) if integration_request.data else {}
+
+		# Restore user session (same pattern as CCAvenue / Easebuzz)
+		notes = data.get("notes") or {}
+		if isinstance(notes, str):
+			try:
+				notes = json.loads(notes)
+			except Exception:
+				notes = {}
+		user = notes.get("user") or data.get("user") or ""
+		if user and user != "Guest" and frappe.session.user == "Guest":
+			try:
+				frappe.set_user(user)
+				frappe.local.login_manager.login_as(user)
+			except Exception:
+				frappe.log_error(frappe.get_traceback(), "Razorpay session restore error")
+
+		# Resolve merchant credentials for signature verification
+		settings = frappe.get_doc("Razorpay Settings")
+		company = data.get("company") or (notes.get("company") if isinstance(notes, dict) else None)
+		merchant_name = (
+			data.get("custom_merchant_name")
+			or (notes.get("merchant_name") if isinstance(notes, dict) else None)
+		)
+		creds = settings.get_credentials(data=data, company=company, merchant_name=merchant_name)
+
+		# Verify HMAC-SHA256 signature: order_id + "|" + payment_id
+		body = f"{razorpay_order_id}|{razorpay_payment_id}"
+		try:
+			settings.verify_signature(body, razorpay_signature, creds.api_secret)
+		except frappe.PermissionError as sig_err:
+			frappe.log_error(str(sig_err), "Razorpay Signature Verification Failed")
+			return {"success": False, "error": "Signature verification failed"}
+
+		# Merge Razorpay callback params into integration data
+		data.update(
+			{
+				"razorpay_payment_id": razorpay_payment_id,
+				"razorpay_order_id": razorpay_order_id,
+				"razorpay_signature": razorpay_signature,
+				"user": user or frappe.session.user,
+				"webhook_source": "verify_payment_api",
+			}
+		)
+		integration_request.data = json.dumps(data)
+		integration_request.save(ignore_permissions=True)
+		frappe.db.commit()
+
+		# Authorize payment
+		controller = frappe.get_doc("Razorpay Settings")
+		controller.integration_request = integration_request
+		controller.data = frappe._dict(data)
+		controller.data.razorpay_payment_id = razorpay_payment_id
+		controller.data.reference_doctype = data.get("reference_doctype", "")
+		controller.data.reference_docname = data.get("reference_docname", "")
+		result = controller.authorize_payment()
+
+		# Set session cookies so the browser retains the restored session
+		if user and user != "Guest":
+			try:
+				frappe.local.cookie_manager.set_cookie("system_user", user)
+				frappe.local.cookie_manager.set_cookie("user_id", user)
+				frappe.local.cookie_manager.set_cookie("sid", frappe.session.sid)
+			except Exception:
+				pass
+
+		return {
+			"success": True,
+			"status": result.get("status"),
+			"payment_id": razorpay_payment_id,
+			"redirect_to": result.get("redirect_to"),
+			"reference_doctype": data.get("reference_doctype"),
+			"reference_docname": data.get("reference_docname"),
+		}
+
+	except frappe.DoesNotExistError:
+		return {"success": False, "error": "Payment request not found"}
+	except Exception as e:
+		frappe.log_error(
+			f"Razorpay verify_payment error: {str(e)}\n{frappe.get_traceback()}",
+			"Razorpay Payment Verification Error",
+		)
+		return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist(allow_guest=True)
+def check_payment_status(integration_request_name):
+	"""
+	Poll the status of a Razorpay payment by Integration Request name.
+
+	Returns
+	-------
+	{
+	    "success": True,
+	    "status":            "Queued|Authorized|Completed|Failed",
+	    "payment_id":        "<razorpay_payment_id>",
+	    "order_id":          "<razorpay_order_id>",
+	    "amount":            <float>,
+	    "currency":          "INR",
+	    "reference_doctype": "...",
+	    "reference_docname": "...",
+	    "company":           "...",
+	    "merchant_name":     "..."
+	}
+	"""
+	try:
+		integration_request = frappe.get_doc("Integration Request", integration_request_name)
+		data = json.loads(integration_request.data) if integration_request.data else {}
+		notes = data.get("notes") or {}
+		if isinstance(notes, str):
+			try:
+				notes = json.loads(notes)
+			except Exception:
+				notes = {}
+
+		return {
+			"success": True,
+			"status": integration_request.status,
+			"payment_id": data.get("razorpay_payment_id"),
+			"order_id": data.get("razorpay_order_id") or data.get("order_id"),
+			"amount": data.get("amount"),
+			"currency": data.get("currency", "INR"),
+			"reference_doctype": integration_request.reference_doctype or data.get("reference_doctype"),
+			"reference_docname": integration_request.reference_docname or data.get("reference_docname"),
+			"company": data.get("company") or (notes.get("company") if isinstance(notes, dict) else None),
+			"merchant_name": data.get("custom_merchant_name") or (
+				notes.get("merchant_name") if isinstance(notes, dict) else None
+			),
+		}
+
+	except frappe.DoesNotExistError:
+		return {"success": False, "error": "Payment request not found"}
+	except Exception as e:
+		frappe.log_error(
+			f"Razorpay check_payment_status error: {str(e)}\n{frappe.get_traceback()}",
+			"Razorpay Payment Status Error",
+		)
+		return {"success": False, "error": str(e)}
