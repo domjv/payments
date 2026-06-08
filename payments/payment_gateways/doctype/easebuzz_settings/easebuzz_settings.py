@@ -822,7 +822,20 @@ def webhook_callback():
                 "status": "Failed",
                 "error": "Invalid token"
             }
-        
+
+        # Duplicate-prevention guard: if payment already processed, return early
+        if integration_request.status in ("Completed", "Authorized"): # may have to change the status
+            frappe.logger().info(
+                f"Easebuzz webhook_callback: {integration_request.name} already processed "
+                f"with status {integration_request.status}. Skipping."
+            )
+            return {
+                "success": True,
+                "message": "Payment already processed",
+                "status": integration_request.status,
+                "payment_status": response_data.get("status"),
+            }
+
         # Update the data
         data = json.loads(integration_request.data)
         data.update({
@@ -869,3 +882,140 @@ def webhook_callback():
             "status": "Failed",
             "error": str(e)
         }
+
+
+@frappe.whitelist(allow_guest=True)
+def refund_status():
+    """
+    Instant Refund Status webhook - Handles real-time refund status updates from Easebuzz.
+    Called by Easebuzz whenever a refund API response is received.
+
+    Configure this URL in your Easebuzz dashboard under Refund Webhook URL:
+        https://your-domain.com/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.refund_status?merchant={merchant_name}
+
+    Expected POST parameters from Easebuzz:
+        txnid         - Original transaction ID
+        refundId      - Unique refund reference from Easebuzz
+        status        - Refund status (success / failed / pending)
+        amount        - Refunded amount
+        bank_ref_num  - Bank reference number (if available)
+        error_Message - Error description on failure
+    """
+    try:
+        response_data = dict(frappe.request.form)
+        merchant_name = frappe.request.args.get('merchant')
+
+        if not response_data:
+            frappe.log_error("No data received in refund_status", "Easebuzz Refund Webhook")
+            return {"success": False, "error": "No response received"}
+
+        # Resolve merchant for hash verification
+        settings = frappe.get_doc("Easebuzz Settings")
+        if merchant_name:
+            try:
+                merchant_doc = frappe.get_doc("Easebuzz Merchant", merchant_name)
+            except frappe.DoesNotExistError:
+                frappe.log_error(
+                    f"Easebuzz Merchant '{merchant_name}' not found, falling back to default.",
+                    "Easebuzz Refund Webhook"
+                )
+                merchant_doc = settings.get_merchant_for_company()
+        else:
+            # No merchant in URL — fall back to default merchant
+            merchant_doc = settings.get_merchant_for_company()
+
+        merchant_salt = merchant_doc.get_password(fieldname="salt", raise_exception=False) if merchant_doc else None
+        if merchant_salt and not verify_response_hash(response_data, merchant_salt):
+            frappe.log_error("Hash verification failed in refund_status", "Easebuzz Refund Webhook")
+
+        # Extract refund fields
+        txnid = response_data.get("txnid") or response_data.get("easepayid")
+        refund_id = response_data.get("refundId") or response_data.get("refund_id")
+        refund_status_val = (response_data.get("status") or "").lower()
+        refund_amount = response_data.get("amount")
+        bank_ref_num = response_data.get("bank_ref_num")
+        error_message = response_data.get("error_Message")
+
+        if not txnid:
+            frappe.log_error(
+                f"No txnid in Easebuzz refund webhook. Data: {response_data}",
+                "Easebuzz Refund Webhook"
+            )
+            return {"success": False, "error": "Missing transaction ID"}
+
+        # Locate the Integration Request by txnid stored in its data
+        matching = frappe.get_all(
+            "Integration Request",
+            filters={"integration_request_service": "Easebuzz"},
+            fields=["name", "data"],
+            order_by="creation desc",
+            limit=50,
+        )
+        integration_request = None
+        for row in matching:
+            try:
+                d = json.loads(row.data or "{}")
+                if d.get("txnid") == txnid or d.get("easepayid") == txnid:
+                    integration_request = frappe.get_doc("Integration Request", row.name)
+                    break
+            except Exception:
+                continue
+
+        if not integration_request:
+            frappe.log_error(
+                f"No Integration Request found for txnid={txnid}",
+                "Easebuzz Refund Webhook"
+            )
+            return {"success": False, "error": f"Integration Request not found for txnid {txnid}"}
+
+        # Update Integration Request data with refund info
+        data = json.loads(integration_request.data or "{}")
+        if "refunds" not in data:
+            data["refunds"] = []
+
+        refund_entry = {
+            "refund_id": refund_id,
+            "refund_status": refund_status_val,
+            "refund_amount": refund_amount,
+            "bank_ref_num": bank_ref_num,
+            "error_message": error_message,
+            "refund_time": frappe.utils.now(),
+            "refund_response": response_data,
+        }
+        data["refunds"].append(refund_entry)
+        data["latest_refund_status"] = refund_status_val
+
+        integration_request.data = json.dumps(data)
+        integration_request.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        frappe.logger().info(
+            f"Easebuzz Refund: txnid={txnid}, refund_id={refund_id}, "
+            f"status={refund_status_val}, amount={refund_amount}"
+        )
+
+        # Call on_refund_status_update on the reference document if the method exists
+        try:
+            if data.get("reference_doctype") and data.get("reference_docname"):
+                doc = frappe.get_doc(data["reference_doctype"], data["reference_docname"])
+                if hasattr(doc, "on_refund_status_update"):
+                    doc.run_method("on_refund_status_update", refund_entry)
+        except Exception as e:
+            frappe.log_error(
+                f"on_refund_status_update error: {str(e)}\n{frappe.get_traceback()}",
+                "Easebuzz Refund Handler Error"
+            )
+
+        return {
+            "success": True,
+            "txnid": txnid,
+            "refund_id": refund_id,
+            "refund_status": refund_status_val,
+            "refund_amount": refund_amount,
+            "integration_request": integration_request.name,
+        }
+
+    except Exception as e:
+        frappe.log_error(f"{str(e)}\n{frappe.get_traceback()}", "Easebuzz Refund Webhook Error")
+        return {"success": False, "error": str(e)}
+

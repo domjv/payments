@@ -1,3 +1,4 @@
+import json
 from contextlib import contextmanager
 
 import click
@@ -43,6 +44,35 @@ def get_checkout_url(**kwargs):
 			indicator_color="red",
 			http_status_code=frappe.ValidationError.http_status_code,
 		)
+
+
+@frappe.whitelist(allow_guest=True)
+def get_payment_context(integration_request_name):
+	"""
+	Return minimal payment context for a payment token without exposing
+	Integration Request doctype read permissions.
+	"""
+	try:
+		validate_integration_request(integration_request_name)
+		doc = frappe.get_doc("Integration Request", integration_request_name, check_permission=False)
+		data = json.loads(doc.data) if doc.data else {}
+		return {
+			"success": True,
+			"integration_request_name": doc.name,
+			"status": doc.status,
+			"service": doc.integration_request_service,
+			"company": data.get("company"),
+			"reference_doctype": doc.reference_doctype,
+			"reference_docname": doc.reference_docname,
+		}
+	except frappe.DoesNotExistError:
+		return {"success": False, "error": "Payment request not found"}
+	except Exception as e:
+		frappe.log_error(
+			f"get_payment_context error: {str(e)}\n{frappe.get_traceback()}",
+			"Payment Context Error",
+		)
+		return {"success": False, "error": str(e)}
 
 
 def create_payment_gateway(gateway, settings=None, controller=None):
