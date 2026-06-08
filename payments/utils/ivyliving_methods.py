@@ -401,45 +401,56 @@ def handle_cart_submit():
         remarks = f"{remarks} | Items: {', '.join(item_code_and_price)} | Student ID: {customer_id}"
 
     try:
-        controller = frappe.get_doc("CCAvenue Settings")
-
         customer = frappe.get_doc("Customer", customer_id)
-
+        company = customer.get("custom_hostel_name")
         total_money_to_pay = round(total_amount, 2)
-        
-        # Prepare payment details
-        # Note: order_id will be automatically set to Integration Request name by get_payment_url
+
+        # Resolve gateway and optional merchant for this company
+        from payments.payments.doctype.payment_gateway_config.payment_gateway_config import (
+            get_gateway_for_company,
+        )
+        gateway, config_merchant = get_gateway_for_company(company)
+
+        # Explicit item-level merchant takes precedence over config
+        resolved_merchant = merchant_name or config_merchant
+
+        # Resolve controller doctype name → settings doctype
+        gateway_settings_doctype_map = {
+            "CCAvenue": "CCAvenue Settings",
+            "Easebuzz": "Easebuzz Settings",
+            "Razorpay": "Razorpay Settings",
+        }
+        settings_doctype = gateway_settings_doctype_map.get(gateway, "CCAvenue Settings")
+        controller = frappe.get_doc(settings_doctype)
+
         payment_details = {
             "amount": total_money_to_pay,
             "currency": "INR",
             "description": remarks,
-            "payer_name": customer.name,  # Customer ID for reference
+            "payer_name": customer.name,
             "payer_email": frappe.session.user,
-            "payment_gateway": "CCAvenue",
+            "payment_gateway": gateway,
             "reference_docname": customer.name,
             "reference_doctype": "Customer",
-            "company": customer.get("custom_hostel_name")  # Pass company for merchant selection
+            "company": company,
         }
-        
-        # Add merchant name if explicitly provided
-        if merchant_name:
-            payment_details["custom_merchant_name"] = merchant_name
-        
-        # This will create an Integration Request and use its name as order_id
-        payment_url = controller.get_payment_url(**payment_details)
 
+        if resolved_merchant:
+            payment_details["custom_merchant_name"] = resolved_merchant
+
+        payment_url = controller.get_payment_url(**payment_details)
 
         if not payment_url:
             frappe.response['success'] = False
-            frappe.response['message'] = "Failed to create Razorpay order."
-            frappe.throw(_("Failed to create Razorpay order."))
+            frappe.response['message'] = f"Failed to create {gateway} payment URL."
+            frappe.throw(_(f"Failed to create {gateway} payment URL."))
 
         frappe.response['success'] = True
         frappe.response['message'] = "Order created successfully."
         frappe.response['payment_url'] = payment_url
-
+        frappe.response['gateway'] = gateway
 
     except Exception as e:
-        frappe.log_error("Razorpay Order Creation Error", str(e))
+        frappe.log_error(f"Payment Order Creation Error ({gateway if 'gateway' in dir() else 'unknown'})", str(e))
         frappe.response['success'] = False
         frappe.response['message'] = f"An error occurred while creating the payment order: {str(e)}"

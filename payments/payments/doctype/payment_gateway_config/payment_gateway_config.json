@@ -1,0 +1,78 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:{company}",
+ "creation": "2026-06-08 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "preferred_gateway",
+  "merchant_name",
+  "column_break_1",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "preferred_gateway",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Preferred Payment Gateway",
+   "options": "CCAvenue\nEasebuzz\nRazorpay",
+   "reqd": 1,
+   "default": "CCAvenue"
+  },
+  {
+   "description": "Optional: explicit merchant record to use for this company. Leave blank to use the company-match or default merchant of the preferred gateway.",
+   "fieldname": "merchant_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Merchant Name (Override)"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-08 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Payments",
+ "name": "Payment Gateway Config",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "company"
+}
