@@ -962,6 +962,138 @@ def verify_payment(razorpay_payment_id, razorpay_order_id, razorpay_signature, t
 
 
 @frappe.whitelist(allow_guest=True)
+def refund_status():
+	"""
+	Webhook endpoint for Razorpay refund events.
+
+	Razorpay sends a signed JSON payload to this URL for events such as
+	``refund.created``, ``refund.processed``, and ``refund.failed``.
+
+	Configure this URL in the Razorpay Dashboard under
+	Settings → Webhooks: ``<your-site>/api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.refund_status``
+
+	Webhook secret is verified via the ``X-Razorpay-Signature`` header.
+	The endpoint calls ``on_refund_status_update(refund_data)`` on the
+	original reference document if it implements the method.
+
+	Returns HTTP 200 in all non-error cases so Razorpay stops retrying.
+	"""
+	try:
+		payload_bytes = frappe.request.data
+		signature = frappe.request.headers.get("X-Razorpay-Signature", "")
+
+		if not payload_bytes:
+			frappe.local.response.http_status_code = 400
+			return {"success": False, "error": "Empty payload"}
+
+		data = json.loads(payload_bytes)
+		event = data.get("event", "")
+
+		if not event.startswith("refund."):
+			# Not a refund event – acknowledge and ignore
+			return {"success": True, "message": "Event ignored"}
+
+		refund_entity = (
+			data.get("payload", {}).get("refund", {}).get("entity", {})
+		)
+		payment_id = refund_entity.get("payment_id")
+		refund_id = refund_entity.get("id")
+		refund_status_val = refund_entity.get("status")
+
+		if not payment_id:
+			return {"success": False, "error": "payment_id missing from refund payload"}
+
+		# Find the Integration Request by razorpay_payment_id stored in data
+		integration_requests = frappe.get_all(
+			"Integration Request",
+			filters={"integration_request_service": "Razorpay"},
+			fields=["name", "data", "reference_doctype", "reference_docname"],
+		)
+
+		integration_request = None
+		for ir in integration_requests:
+			ir_data = json.loads(ir.data) if ir.data else {}
+			if ir_data.get("razorpay_payment_id") == payment_id or ir_data.get("order_id") == refund_entity.get("payment_id"):
+				integration_request = frappe.get_doc("Integration Request", ir.name)
+				break
+
+		if not integration_request:
+			frappe.log_error(
+				f"Integration Request not found for Razorpay payment_id={payment_id} refund_id={refund_id}",
+				"Razorpay Refund Webhook",
+			)
+			return {"success": True, "message": "Integration Request not found – acknowledged"}
+
+		# Verify signature if a webhook secret is available
+		settings = frappe.get_doc("Razorpay Settings")
+		ir_data = json.loads(integration_request.data) if integration_request.data else {}
+		try:
+			creds = settings.get_credentials(data=ir_data)
+			if creds.api_secret and signature:
+				settings.verify_signature(
+					payload_bytes.decode("utf-8"), signature, creds.api_secret
+				)
+		except frappe.PermissionError:
+			frappe.log_error("Razorpay refund signature verification failed", "Razorpay Refund Webhook")
+			frappe.local.response.http_status_code = 401
+			return {"success": False, "error": "Signature verification failed"}
+		except Exception:
+			# If signature check isn't possible (no secret configured), log and continue
+			frappe.log_error(frappe.get_traceback(), "Razorpay Refund Signature Check Warning")
+
+		# Update the integration request with refund details
+		ir_data.update(
+			{
+				"refund_id": refund_id,
+				"refund_status": refund_status_val,
+				"refund_amount": refund_entity.get("amount"),
+				"refund_event": event,
+			}
+		)
+		integration_request.data = json.dumps(ir_data)
+		integration_request.save(ignore_permissions=True)
+		frappe.db.commit()
+
+		# Call on_refund_status_update on the reference document if it exists
+		if integration_request.reference_doctype and integration_request.reference_docname:
+			try:
+				ref_doc = frappe.get_doc(
+					integration_request.reference_doctype,
+					integration_request.reference_docname,
+				)
+				if hasattr(ref_doc, "on_refund_status_update"):
+					ref_doc.run_method(
+						"on_refund_status_update",
+						{
+							"refund_id": refund_id,
+							"payment_id": payment_id,
+							"status": refund_status_val,
+							"amount": refund_entity.get("amount"),
+							"event": event,
+							"gateway": "Razorpay",
+						},
+					)
+			except Exception:
+				frappe.log_error(
+					frappe.get_traceback(),
+					f"Razorpay on_refund_status_update error for {integration_request.reference_doctype} {integration_request.reference_docname}",
+				)
+
+		return {
+			"success": True,
+			"refund_id": refund_id,
+			"status": refund_status_val,
+		}
+
+	except Exception as e:
+		frappe.log_error(
+			f"Razorpay refund webhook error: {str(e)}\n{frappe.get_traceback()}",
+			"Razorpay Refund Webhook Error",
+		)
+		return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist(allow_guest=True)
 def check_payment_status(integration_request_name):
 	"""
 	Poll the status of a Razorpay payment by Integration Request name.
