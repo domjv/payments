@@ -1,0 +1,208 @@
+{
+  "info": {
+    "name": "Razorpay Payment Gateway – Ivy Living",
+    "description": "Multi-merchant Razorpay API endpoints for the Ivy Living hostel management application built on ERPNext.\n\nSet the `baseUrl` collection variable to your ERPNext site URL (e.g. `https://yoursite.frappe.cloud`).\n\nFor guest endpoints no auth is required. For `get_payment_details` and desk-facing endpoints, set a valid `Authorization: token <api_key>:<api_secret>` header or use session cookies.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "integrationRequestName",
+      "value": "",
+      "type": "string",
+      "description": "Set after calling initiate_payment"
+    }
+  ],
+  "item": [
+    {
+      "name": "Razorpay",
+      "item": [
+        {
+          "name": "Initiate Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.initiate_payment",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api", "method",
+                "payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.initiate_payment"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 500,\n  \"reference_doctype\": \"Sales Invoice\",\n  \"reference_docname\": \"SINV-0001\",\n  \"payer_email\": \"student@example.com\",\n  \"payer_name\": \"CUST-00001\",\n  \"currency\": \"INR\",\n  \"company\": \"Hostel Koramangala Pvt Ltd\",\n  \"description\": \"Payment for Invoice SINV-0001\",\n  \"phone\": \"9999999999\"\n}"
+            },
+            "description": "Creates a Razorpay order and returns the order details needed for the Checkout.js modal.\n\nSet the `payment_token` from the response as `{{integrationRequestName}}`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.message && json.message.payment_token) {",
+                  "  pm.collectionVariables.set('integrationRequestName', json.message.payment_token);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.verify_payment",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api", "method",
+                "payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.verify_payment"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"razorpay_payment_id\": \"pay_NxxxxxxxxxXXXXX\",\n  \"razorpay_order_id\": \"order_NxxxxxxxxxXXXXX\",\n  \"razorpay_signature\": \"<hmac_sha256_signature>\",\n  \"token\": \"{{integrationRequestName}}\"\n}"
+            },
+            "description": "Called by the frontend after Checkout.js fires payment.success.\n\nVerifies the HMAC-SHA256 signature, restores the user session, creates a Payment Entry and returns the redirect URL."
+          }
+        },
+        {
+          "name": "Check Payment Status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.check_payment_status?integration_request_name={{integrationRequestName}}",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api", "method",
+                "payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.check_payment_status"
+              ],
+              "query": [
+                {
+                  "key": "integration_request_name",
+                  "value": "{{integrationRequestName}}"
+                }
+              ]
+            },
+            "description": "Poll the status of a payment. Status values: Queued | Authorized | Completed | Failed."
+          }
+        },
+        {
+          "name": "Refund Webhook (simulate)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Razorpay-Signature", "value": "<webhook_signature>" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.refund_status",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api", "method",
+                "payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.refund_status"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"event\": \"refund.processed\",\n  \"payload\": {\n    \"refund\": {\n      \"entity\": {\n        \"id\": \"rfnd_NxxxxxxxxxXXXXX\",\n        \"payment_id\": \"pay_NxxxxxxxxxXXXXX\",\n        \"status\": \"processed\",\n        \"amount\": 50000\n      }\n    }\n  }\n}"
+            },
+            "description": "Server-to-server refund webhook from Razorpay. In production this is called by Razorpay directly. Configure the URL in Razorpay Dashboard → Settings → Webhooks."
+          }
+        },
+        {
+          "name": "Validate Merchant Credentials",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "token <api_key>:<api_secret>" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.validate_merchant_credentials",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api", "method",
+                "payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.validate_merchant_credentials"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchant_name\": \"Default\"\n}"
+            },
+            "description": "Test connectivity for a specific Razorpay Merchant record. Requires System Manager auth."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Multi-Gateway Cart",
+      "item": [
+        {
+          "name": "Handle Cart Submit (gateway-aware)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/x-www-form-urlencoded" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.utils.ivyliving_methods.handle_cart_submit",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api", "method",
+                "payments.utils.ivyliving_methods.handle_cart_submit"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "requestObj",
+                  "value": "{\"cart\":[{\"itemCode\":\"ITEM-001\",\"price\":500}],\"customer\":\"CUST-00001\"}"
+                }
+              ]
+            },
+            "description": "Submit a cart for payment. Gateway is resolved from Payment Gateway Config for the customer's company/hostel.\n\nResponse includes `payment_url` and `gateway` (CCAvenue | Easebuzz | Razorpay)."
+          }
+        },
+        {
+          "name": "Get Payment Details (Sales Invoice)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "token <api_key>:<api_secret>" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.overrides.sales_invoice.get_payment_details?sales_invoice_name=SINV-0001",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api", "method",
+                "payments.overrides.sales_invoice.get_payment_details"
+              ],
+              "query": [
+                {
+                  "key": "sales_invoice_name",
+                  "value": "SINV-0001"
+                }
+              ]
+            },
+            "description": "Returns payment details for a Sales Invoice ready for any initiate_payment call."
+          }
+        }
+      ]
+    }
+  ]
+}

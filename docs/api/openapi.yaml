@@ -1,0 +1,492 @@
+openapi: 3.1.0
+
+info:
+  title: Ivy Living – Payment Gateway API
+  version: 1.0.0
+  description: |
+    Multi-gateway payment API for the Ivy Living hostel management system.
+    Supports CCAvenue, Easebuzz and Razorpay with per-company/hostel routing.
+
+    **Authentication:** Guest endpoints (`allow_guest=True`) require no auth.
+    All other endpoints require an `Authorization: token <api_key>:<api_secret>` header
+    or a valid Frappe session cookie.
+
+servers:
+  - url: https://{site}
+    variables:
+      site:
+        default: yoursite.frappe.cloud
+        description: ERPNext site hostname
+
+tags:
+  - name: Razorpay
+    description: Razorpay multi-merchant payment endpoints
+  - name: Easebuzz
+    description: Easebuzz payment endpoints
+  - name: CCAvenue
+    description: CCAvenue payment endpoints
+  - name: Common
+    description: Multi-gateway and utility endpoints
+
+# -----------------------------------------------------------------------
+# COMPONENTS
+# -----------------------------------------------------------------------
+components:
+  schemas:
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: "Missing required parameter: payer_email"
+
+    RazorpayInitiateRequest:
+      type: object
+      required: [amount, reference_doctype, reference_docname, payer_email, payer_name]
+      properties:
+        amount:
+          type: number
+          description: Payment amount in major currency units (e.g. INR). Payment Charges are added server-side.
+          example: 500.00
+        reference_doctype:
+          type: string
+          example: "Sales Invoice"
+        reference_docname:
+          type: string
+          example: "SINV-0001"
+        payer_email:
+          type: string
+          format: email
+          example: "student@example.com"
+        payer_name:
+          type: string
+          description: Customer ID or display name
+          example: "CUST-00001"
+        currency:
+          type: string
+          default: "INR"
+          example: "INR"
+        company:
+          type: string
+          description: ERPNext Company name; drives merchant resolution
+          example: "Hostel Koramangala Pvt Ltd"
+        custom_merchant_name:
+          type: string
+          description: Explicit Razorpay Merchant record name (optional override)
+          example: "Hostel-Koramangala"
+        description:
+          type: string
+          example: "Payment for Invoice SINV-0001"
+        phone:
+          type: string
+          example: "9999999999"
+
+    RazorpayInitiateResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        payment_token:
+          type: string
+          description: Integration Request name – use as `token` in verify_payment
+          example: "INT-00123"
+        order_id:
+          type: string
+          description: Razorpay order ID – pass to Checkout.js
+          example: "order_NxxxxxxxxxXXXXX"
+        api_key:
+          type: string
+          description: Razorpay API key (public) – pass to Checkout.js
+          example: "rzp_live_xxxxxxxxxxxxxxx"
+        amount:
+          type: integer
+          description: Amount in paise (1 INR = 100 paise) – pass to Checkout.js
+          example: 50000
+        currency:
+          type: string
+          example: "INR"
+        merchant_name:
+          type: string
+          example: "Hostel-Koramangala"
+        company:
+          type: string
+          example: "Hostel Koramangala Pvt Ltd"
+        environment:
+          type: string
+          enum: [Test, Production]
+          example: "Production"
+        prefill:
+          type: object
+          properties:
+            name:
+              type: string
+            email:
+              type: string
+            contact:
+              type: string
+
+    RazorpayVerifyRequest:
+      type: object
+      required: [razorpay_payment_id, razorpay_order_id, razorpay_signature, token]
+      properties:
+        razorpay_payment_id:
+          type: string
+          description: From Checkout.js payment.success handler
+          example: "pay_NxxxxxxxxxXXXXX"
+        razorpay_order_id:
+          type: string
+          example: "order_NxxxxxxxxxXXXXX"
+        razorpay_signature:
+          type: string
+          description: HMAC-SHA256 of `order_id|payment_id` with api_secret
+          example: "abc123..."
+        token:
+          type: string
+          description: payment_token from initiate_payment response
+          example: "INT-00123"
+
+    RazorpayVerifyResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        status:
+          type: string
+          enum: [Queued, Authorized, Completed, Failed]
+        payment_id:
+          type: string
+        redirect_to:
+          type: string
+          description: URL to redirect the user to after payment
+        reference_doctype:
+          type: string
+        reference_docname:
+          type: string
+
+    PaymentStatusResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        status:
+          type: string
+          enum: [Queued, Authorized, Completed, Failed]
+        payment_id:
+          type: string
+        order_id:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+        reference_doctype:
+          type: string
+        reference_docname:
+          type: string
+        company:
+          type: string
+        merchant_name:
+          type: string
+
+    CartSubmitRequest:
+      type: object
+      required: [cart, customer]
+      properties:
+        cart:
+          type: array
+          items:
+            type: object
+            required: [itemCode, price]
+            properties:
+              itemCode:
+                type: string
+              price:
+                type: number
+        customer:
+          type: string
+          description: ERPNext Customer ID
+
+    CartSubmitResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        payment_url:
+          type: string
+          description: URL / token to initiate payment
+        gateway:
+          type: string
+          enum: [CCAvenue, Easebuzz, Razorpay]
+          description: Which gateway was selected for this customer's hostel
+
+# -----------------------------------------------------------------------
+# PATHS
+# -----------------------------------------------------------------------
+paths:
+
+  /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.initiate_payment:
+    post:
+      tags: [Razorpay]
+      summary: Initiate Razorpay Payment
+      description: |
+        Creates a Razorpay order server-side and returns credentials for the
+        frontend to open the Checkout.js modal. Payment Charge surcharges are
+        applied server-side before the order is created.
+      operationId: razorpay_initiate_payment
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RazorpayInitiateRequest"
+      responses:
+        "200":
+          description: Payment initiated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    $ref: "#/components/schemas/RazorpayInitiateResponse"
+        "200 (error)":
+          description: Validation or gateway error (HTTP 200 with success=false)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    $ref: "#/components/schemas/ErrorResponse"
+
+  /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.verify_payment:
+    post:
+      tags: [Razorpay]
+      summary: Verify Razorpay Payment
+      description: |
+        Called by the frontend after Checkout.js fires `payment.success`.
+        Verifies the HMAC-SHA256 signature, restores the Frappe user session,
+        creates a Payment Entry and returns the redirect URL.
+      operationId: razorpay_verify_payment
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RazorpayVerifyRequest"
+      responses:
+        "200":
+          description: Payment verified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    $ref: "#/components/schemas/RazorpayVerifyResponse"
+
+  /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.check_payment_status:
+    get:
+      tags: [Razorpay, Easebuzz, CCAvenue]
+      summary: Check Payment Status
+      description: Poll the current status of a payment by Integration Request name.
+      operationId: razorpay_check_payment_status
+      security: []
+      parameters:
+        - name: integration_request_name
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "INT-00123"
+      responses:
+        "200":
+          description: Payment status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    $ref: "#/components/schemas/PaymentStatusResponse"
+
+  /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.refund_status:
+    post:
+      tags: [Razorpay]
+      summary: Razorpay Refund Webhook
+      description: |
+        Server-to-server webhook endpoint for Razorpay refund events.
+        Configure in Razorpay Dashboard → Settings → Webhooks.
+        Verifies `X-Razorpay-Signature` and calls `on_refund_status_update` on the reference doc.
+      operationId: razorpay_refund_status
+      security: []
+      parameters:
+        - name: X-Razorpay-Signature
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event:
+                  type: string
+                  enum: [refund.created, refund.processed, refund.failed]
+                payload:
+                  type: object
+      responses:
+        "200":
+          description: Webhook acknowledged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      refund_id:
+                        type: string
+                      status:
+                        type: string
+
+  /api/method/payments.utils.ivyliving_methods.handle_cart_submit:
+    post:
+      tags: [Common]
+      summary: Handle Cart Submit (multi-gateway)
+      description: |
+        Submits a shopping cart for payment. Resolves the correct gateway
+        (CCAvenue / Easebuzz / Razorpay) from `Payment Gateway Config` for
+        the customer's company/hostel. Returns a `payment_url` and `gateway`.
+      operationId: handle_cart_submit
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [requestObj]
+              properties:
+                requestObj:
+                  type: string
+                  description: JSON-encoded cart object
+                  example: '{"cart":[{"itemCode":"ITEM-001","price":500}],"customer":"CUST-00001"}'
+      responses:
+        "200":
+          description: Cart processed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  payment_url:
+                    type: string
+                  gateway:
+                    type: string
+                    enum: [CCAvenue, Easebuzz, Razorpay]
+
+  /api/method/payments.overrides.sales_invoice.get_payment_details:
+    get:
+      tags: [Common]
+      summary: Get Payment Details for Sales Invoice
+      description: Returns payment initiation data for a Sales Invoice. Used to pre-fill initiate_payment requests.
+      operationId: get_payment_details
+      requestBody: null
+      parameters:
+        - name: sales_invoice_name
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "SINV-0001"
+      responses:
+        "200":
+          description: Payment details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      data:
+                        $ref: "#/components/schemas/RazorpayInitiateRequest"
+
+  /api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.initiate_payment:
+    post:
+      tags: [Easebuzz]
+      summary: Initiate Easebuzz Payment
+      description: Creates an Easebuzz payment link. Returns `payment_url` for browser redirect.
+      operationId: easebuzz_initiate_payment
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RazorpayInitiateRequest"
+      responses:
+        "200":
+          description: Payment initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      payment_token:
+                        type: string
+                      payment_url:
+                        type: string
+                      txnid:
+                        type: string
+                      merchant_name:
+                        type: string
+
+  /api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.check_payment_status:
+    get:
+      tags: [Easebuzz]
+      summary: Check Easebuzz Payment Status
+      operationId: easebuzz_check_payment_status
+      security: []
+      parameters:
+        - name: integration_request_name
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payment status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    $ref: "#/components/schemas/PaymentStatusResponse"
