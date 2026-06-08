@@ -285,7 +285,7 @@ class RazorpaySettings(Document):
 				order = make_post_request(
 					"https://api.razorpay.com/v1/orders",
 					auth=(creds.api_key, creds.api_secret),
-					data=payment_options,
+					json=payment_options,
 				)
 				order["integration_request"] = integration_request.name
 				return order
