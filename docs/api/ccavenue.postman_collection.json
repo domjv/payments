@@ -1,0 +1,190 @@
+{
+  "info": {
+    "name": "CCAvenue Payment Gateway – Ivy Living",
+    "description": "Multi-merchant CCAvenue API endpoints for the Ivy Living hostel management application.\n\nSet the `baseUrl` collection variable to your ERPNext site URL.\nSet `merchantName` to the CCAvenue Merchant record name (e.g. `Hostel-Koramangala`).\n\nGuest endpoints require no auth. Desk endpoints require `Authorization: token <api_key>:<api_secret>`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000", "type": "string" },
+    { "key": "merchantName", "value": "Default", "type": "string" },
+    { "key": "integrationRequestName", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Payment Initiation",
+      "item": [
+        {
+          "name": "Initiate Payment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.initiate_payment",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.initiate_payment"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 500,\n  \"reference_doctype\": \"Sales Invoice\",\n  \"reference_docname\": \"SINV-0001\",\n  \"payer_email\": \"student@example.com\",\n  \"payer_name\": \"CUST-00001\",\n  \"currency\": \"INR\",\n  \"company\": \"Hostel Koramangala Pvt Ltd\",\n  \"description\": \"Payment for Invoice SINV-0001\"\n}"
+            },
+            "description": "Creates an encrypted CCAvenue payload. The response contains `encrypted_data`, `access_code`, `merchant_id`, and `api_url` needed to POST to CCAvenue.\n\nSuccess response fields:\n- `payment_token` – Integration Request name\n- `encrypted_data` – AES-128-CBC encrypted payload\n- `access_code` – CCAvenue Access Code\n- `merchant_id` – CCAvenue Merchant ID\n- `api_url` – CCAvenue payment API URL\n- `iframe_url` – For iframe embedding\n- `merchant_name` – Resolved merchant record name"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.message && json.message.payment_token) {",
+                  "  pm.collectionVariables.set('integrationRequestName', json.message.payment_token);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Check Payment Status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.check_payment_status?integration_request_name={{integrationRequestName}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.check_payment_status"],
+              "query": [{ "key": "integration_request_name", "value": "{{integrationRequestName}}" }]
+            },
+            "description": "Poll the status of a payment. Status: Queued | Authorized | Completed | Failed."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhooks / Callbacks",
+      "item": [
+        {
+          "name": "Verify Transaction (browser redirect)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.verify_transaction?merchant={{merchantName}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.verify_transaction"],
+              "query": [{ "key": "merchant", "value": "{{merchantName}}" }]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [{ "key": "encResp", "value": "<encrypted_response_from_ccavenue>" }]
+            },
+            "description": "Primary browser redirect from CCAvenue. Decrypts `encResp`, updates Integration Request, creates Payment Entry, restores user session, and redirects.\n\nConfigure as `redirect_url` in CCAvenue dashboard."
+          }
+        },
+        {
+          "name": "Order Status Echo (S2S backup)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.order_status_echo?merchant={{merchantName}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.order_status_echo"],
+              "query": [{ "key": "merchant", "value": "{{merchantName}}" }]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [{ "key": "encResp", "value": "<encrypted_response_from_ccavenue>" }]
+            },
+            "description": "Server-to-server backup webhook. Duplicate-safe – skips if Integration Request already Completed/Authorized.\n\nConfigure as `notify_url` in CCAvenue dashboard."
+          }
+        },
+        {
+          "name": "Reconciliation Status (UPI/delayed)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.reconciliation_status?merchant={{merchantName}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.reconciliation_status"],
+              "query": [{ "key": "merchant", "value": "{{merchantName}}" }]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [{ "key": "encResp", "value": "<encrypted_response_from_ccavenue>" }]
+            },
+            "description": "Handles delayed payment confirmations (UPI, wallet reconciliation)."
+          }
+        },
+        {
+          "name": "Refund Status",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.refund_status?merchant={{merchantName}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.refund_status"],
+              "query": [{ "key": "merchant", "value": "{{merchantName}}" }]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [{ "key": "encResp", "value": "<encrypted_refund_response>" }]
+            },
+            "description": "Handles CCAvenue refund status callbacks. Calls `on_refund_status_update` on the reference document."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Utility",
+      "item": [
+        {
+          "name": "Restore User Session",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.restore_user_session",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.restore_user_session"]
+            },
+            "description": "Restores the Frappe user session after a Guest CCAvenue callback."
+          }
+        },
+        {
+          "name": "Test Connection",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "token <api_key>:<api_secret>" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_utils.test_connection",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.ccavenue_settings.ccavenue_utils.test_connection"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchant_id\": \"1234567\",\n  \"access_code\": \"ABCD01234567890EFGH\",\n  \"encryption_key\": \"myencryptionkey\",\n  \"environment\": \"Sandbox\"\n}"
+            },
+            "description": "Test CCAvenue API credentials. Requires System Manager auth."
+          }
+        },
+        {
+          "name": "Get Payment Details (Sales Invoice)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "token <api_key>:<api_secret>" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.overrides.sales_invoice.get_payment_details?sales_invoice_name=SINV-0001",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.overrides.sales_invoice.get_payment_details"],
+              "query": [{ "key": "sales_invoice_name", "value": "SINV-0001" }]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

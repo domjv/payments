@@ -1,0 +1,130 @@
+{
+  "info": {
+    "name": "Cashfree Payment Gateway – Ivy Living",
+    "description": "Cashfree multi-instance API endpoints for the Ivy Living hostel management application.\n\nSet the `baseUrl` collection variable to your ERPNext site URL.\nSet `settingsName` to the Cashfree Settings `gateway_name` (e.g. `Hostel-Koramangala`).\n\nNote: Unlike CCAvenue/Easebuzz/Razorpay, Cashfree does not expose `initiate_payment` or `check_payment_status` as standalone external APIs. Payment flow goes through the ERPNext checkout page.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000", "type": "string" },
+    { "key": "settingsName", "value": "Hostel-Koramangala", "type": "string" },
+    { "key": "orderId", "value": "", "type": "string" },
+    { "key": "paymentSessionId", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Admin / Testing",
+      "item": [
+        {
+          "name": "Test Cashfree Connection",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "token <api_key>:<api_secret>" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.cashfree_settings.cashfree_settings.test_cashfree_connection",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.cashfree_settings.cashfree_settings.test_cashfree_connection"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"settings_name\": \"{{settingsName}}\"\n}"
+            },
+            "description": "Verifies that the Cashfree Settings credentials can authenticate with the Cashfree API.\n\nReturns:\n- `success: true` + `message: 'Connection successful'`\n- `success: false` + `message: <error>`"
+          }
+        },
+        {
+          "name": "Create Test Payment Link",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "token <api_key>:<api_secret>" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.cashfree_settings.cashfree_settings.create_test_payment_link",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.cashfree_settings.cashfree_settings.create_test_payment_link"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"settings_name\": \"{{settingsName}}\",\n  \"amount\": 500,\n  \"customer_email\": \"student@example.com\",\n  \"customer_name\": \"Test Student\",\n  \"customer_phone\": \"9876543210\",\n  \"description\": \"Test payment link\"\n}"
+            },
+            "description": "Creates a test Cashfree payment link. Useful for verifying the full API integration.\n\nReturns:\n- `cf_link_id` – Cashfree internal link ID\n- `link_id` – Your order ID\n- `link_url` – URL the customer can use to pay\n- `link_status` – `ACTIVE`, `PAID`, or `EXPIRED`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Checkout Flow",
+      "item": [
+        {
+          "name": "Make Payment (checkout page)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.templates.pages.cashfree_checkout.make_payment",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.templates.pages.cashfree_checkout.make_payment"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order_id\": \"{{orderId}}\",\n  \"payment_session_id\": \"{{paymentSessionId}}\",\n  \"reference_doctype\": \"Sales Invoice\",\n  \"reference_docname\": \"SINV-0001\",\n  \"token\": \"INT-00123\"\n}"
+            },
+            "description": "Called by the Cashfree checkout page after the Cashfree JS SDK reports a payment. Fetches the order from Cashfree API, authorizes the payment, and returns a redirect URL.\n\nReturns:\n- `redirect_to` – URL to redirect the user to\n- `status` – `Success` or `Failed`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhooks",
+      "item": [
+        {
+          "name": "Cashfree Webhook (simulate success)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-webhook-signature", "value": "<hmac_sha256_signature>" },
+              { "key": "x-webhook-timestamp", "value": "1700000000" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.cashfree_settings.cashfree_settings.cashfree_webhook",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.cashfree_settings.cashfree_settings.cashfree_webhook"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"PAYMENT_SUCCESS_WEBHOOK\",\n  \"data\": {\n    \"order\": {\n      \"order_id\": \"{{orderId}}\",\n      \"order_status\": \"PAID\",\n      \"order_amount\": 500.00,\n      \"order_currency\": \"INR\"\n    },\n    \"payment\": {\n      \"cf_payment_id\": \"12345678\",\n      \"payment_status\": \"SUCCESS\",\n      \"payment_amount\": 500.00,\n      \"payment_currency\": \"INR\",\n      \"payment_time\": \"2026-01-01T10:00:00+05:30\",\n      \"payment_method\": {\n        \"upi\": { \"upi_id\": \"success@cashfree\" }\n      }\n    },\n    \"customer_details\": {\n      \"customer_id\": \"CUST-00001\",\n      \"customer_email\": \"student@example.com\",\n      \"customer_phone\": \"9876543210\"\n    }\n  }\n}"
+            },
+            "description": "Simulate a Cashfree payment success webhook.\n\n**Note:** The `x-webhook-signature` header must be a valid HMAC-SHA256 of the payload body using the `client_secret` of the matching Cashfree Settings record. Use Cashfree Webhook Simulator in the dashboard instead for real signature testing.\n\nReturns:\n- `{status: 'success'}` – webhook processed\n- `{status: 'error', message: ...}` – verification failed"
+          }
+        },
+        {
+          "name": "Cashfree Webhook (simulate failure)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-webhook-signature", "value": "<hmac_sha256_signature>" },
+              { "key": "x-webhook-timestamp", "value": "1700000000" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.cashfree_settings.cashfree_settings.cashfree_webhook",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.cashfree_settings.cashfree_settings.cashfree_webhook"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"PAYMENT_FAILED_WEBHOOK\",\n  \"data\": {\n    \"order\": {\n      \"order_id\": \"{{orderId}}\",\n      \"order_status\": \"ACTIVE\"\n    },\n    \"payment\": {\n      \"cf_payment_id\": \"12345679\",\n      \"payment_status\": \"FAILED\",\n      \"payment_amount\": 500.00\n    }\n  }\n}"
+            },
+            "description": "Simulate a Cashfree payment failure webhook."
+          }
+        }
+      ]
+    }
+  ]
+}

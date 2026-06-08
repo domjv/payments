@@ -1,348 +1,250 @@
-# Cashfree Payment Gateway Integration - Setup Guide
+# Cashfree Payment Gateway – Administrator Setup Guide
 
-## 🎉 Implementation Complete!
-
-The Cashfree payment gateway has been successfully integrated into the Payments app with full support for:
-
-- ✅ Multiple Cashfree accounts (one per company/hostel)
-- ✅ Default account fallback
-- ✅ Sandbox and Production environments
-- ✅ Invoice payments
-- ✅ Shopping cart integration
-- ✅ Payment links via email
-- ✅ Webhook support for real-time updates
-- ✅ Guest payments (onboarding flow)
+> **Audience:** System Administrators and ERPNext Implementors  
+> **Last updated:** June 2026  
+> **Supersedes:** previous CASHFREE_SETUP.md
 
 ---
 
-## 📦 Installation Steps
+## Table of Contents
 
-### 1. Install the Cashfree SDK
+1. [Prerequisites](#1-prerequisites)
+2. [Architecture Overview](#2-architecture-overview)
+3. [Step 1 – Install Cashfree SDK](#3-step-1--install-cashfree-sdk)
+4. [Step 2 – Create Cashfree Settings Records](#4-step-2--create-cashfree-settings-records)
+5. [Step 3 – ERPNext Accounts Setup](#5-step-3--erpnext-accounts-setup)
+6. [Step 4 – Per-Hostel Configuration](#6-step-4--per-hostel-configuration)
+7. [Step 5 – Configure Cashfree Webhooks](#7-step-5--configure-cashfree-webhooks)
+8. [Step 6 – Test the Integration](#8-step-6--test-the-integration)
+9. [Troubleshooting](#9-troubleshooting)
+10. [Differences from CCAvenue / Easebuzz / Razorpay](#10-differences-from-ccavenue--easebuzz--razorpay)
+11. [FAQ](#11-faq)
+
+---
+
+## 1. Prerequisites
+
+- ERPNext with the `payments` app installed and migrated
+- A Cashfree merchant account ([register at cashfree.com](https://www.cashfree.com))
+- From the Cashfree dashboard, collect:
+  - **App ID** (Client ID)
+  - **Secret Key** (Client Secret)
+- Python SDK: `cashfree_pg` (installed separately)
+
+---
+
+## 2. Architecture Overview
+
+Cashfree uses a **different architecture** from the other gateways:
+
+```
+Company/Hostel A          Company/Hostel B
+      │                         │
+      ▼                         ▼
+Cashfree Settings #1      Cashfree Settings #2
+  gateway_name = HsA        gateway_name = HsB
+  company = Hostel A         company = Hostel B
+  client_id / secret         client_id / secret
+  environment                environment
+      │                         │
+      ▼                         ▼
+Payment Gateway:          Payment Gateway:
+  "Cashfree-HsA"            "Cashfree-HsB"
+```
+
+**Key difference:** There is **no separate "Merchant" doctype**. Each `Cashfree Settings` record *is* the merchant configuration. You create one record per company/hostel.
+
+**Resolution Priority:**
+1. Record where `company` field matches the paying hostel
+2. Record with `is_default = 1`
+3. First available record
+4. Throws `ValidationError` if none found
+
+---
+
+## 3. Step 1 – Install Cashfree SDK
 
 ```bash
-cd /Users/dom/frappe-bench
+cd /path/to/frappe-bench
 bench pip install cashfree_pg
 ```
 
-Or the SDK will be automatically installed when you update/install the app:
+Verify installation:
 ```bash
-bench install-app payments
-# or
-bench update --apps payments
-```
-
-### 2. Restart Bench
-
-```bash
-bench restart
-```
-
-### 3. Run Migrations
-
-```bash
-bench --site your-site-name migrate
-```
-
-This will create the `Cashfree Settings` DocType in your database.
-
----
-
-## ⚙️ Configuration
-
-### Step 1: Get Cashfree Credentials
-
-1. Sign up for Cashfree account at https://www.cashfree.com/
-2. Login to [Cashfree Dashboard](https://merchant.cashfree.com/)
-3. Go to **Developers > API Keys**
-4. Get your **App ID** (Client ID) and **Secret Key**
-5. Note: Use Sandbox credentials for testing
-
-### Step 2: Create Cashfree Settings
-
-1. In ERPNext, go to: **Payment Gateways > Cashfree Settings > New**
-2. Fill in the details:
-
-   **For Hostel 1:**
-   - Gateway Name: `Cashfree-Hostel1`
-   - Company: Select "Hostel 1" (or your company name)
-   - Is Default: Uncheck (only if you have multiple)
-   - Environment: `Sandbox` (for testing)
-   - Client ID: Your Cashfree App ID
-   - Client Secret: Your Cashfree Secret Key
-
-3. Save the document
-
-4. Copy the **Webhook URL** shown in the form
-
-### Step 3: Configure Multiple Accounts (Optional)
-
-Repeat Step 2 for each hostel/company:
-
-**For Hostel 2:**
-- Gateway Name: `Cashfree-Hostel2`
-- Company: Select "Hostel 2"
-- Environment: `Sandbox`
-- ... (different credentials)
-
-**For Default Account:**
-- Gateway Name: `Cashfree-Default`
-- Company: Leave blank
-- Is Default: **Check this**
-- Environment: `Sandbox`
-- ... (credentials)
-
-### Step 4: Configure Webhooks in Cashfree Dashboard
-
-1. Login to [Cashfree Dashboard](https://merchant.cashfree.com/)
-2. Go to **Developers > Webhooks**
-3. Click **Add Webhook**
-4. Paste the Webhook URL from your Cashfree Settings
-5. Select these events:
-   - ✅ `PAYMENT_SUCCESS_WEBHOOK`
-   - ✅ `PAYMENT_FAILED_WEBHOOK`
-6. Save
-
-**Note:** For local testing, use ngrok:
-```bash
-ngrok http 8000
-# Use the ngrok URL in webhook configuration
+bench execute "import cashfree_pg; print(cashfree_pg.__version__)"
 ```
 
 ---
 
-## 🧪 Testing
+## 4. Step 2 – Create Cashfree Settings Records
 
-### Test 1: Invoice Payment
+**Path:** ERPNext Desk → Payments → Cashfree Settings → New
 
-1. Create a Sales Invoice
-2. Click **Get Payment** button (or create Payment Request)
-3. Select payment gateway: `Cashfree-Hostel1`
-4. Complete payment using test credentials:
-   - Card: 4111 1111 1111 1111
-   - CVV: 123
-   - Expiry: Any future date
-   - OTP: 123456
-5. Verify payment status updates to "Paid"
+Create **one record per hostel/company**.
 
-### Test 2: Payment Link
+| Field | Description | Required | Example |
+|---|---|---|---|
+| Gateway Name | Unique identifier for this instance | ✓ | `Hostel-Koramangala` |
+| Company | ERPNext Company this instance belongs to | | `Hostel Koramangala Pvt Ltd` |
+| Is Default | Use as fallback when no company match | | ☑ on one record only |
+| Environment | `Sandbox` or `Production` | ✓ | `Production` |
+| Client ID | Cashfree App ID | ✓ | `CF123456TEST` |
+| Client Secret | Cashfree Secret Key | ✓ | `cfsk_...` |
+| Redirect URL | URL to redirect after payment | | `https://app.example.com/payment` |
+| Webhook URL | Auto-generated on save (read-only) | — | `https://<site>/api/method/...cashfree_webhook` |
 
-Open ERPNext console (bench console):
+### Notes
 
-```python
-from payments.payment_gateways.doctype.cashfree_settings.cashfree_settings import CashfreeSettings
+- `Gateway Name` becomes the Payment Gateway record: `Cashfree-{gateway_name}`.
+- Only one record can have `Is Default` checked — saving automatically clears others.
+- `Webhook URL` is auto-generated and shown read-only — copy it to the Cashfree dashboard.
 
-# Get settings for a specific company
-settings = CashfreeSettings.get_cashfree_settings_by_company("Hostel 1")
+### Test Connection
 
-# Create payment link
-link = settings.create_payment_link(
-    amount=5000,
-    currency="INR",
-    payer_name="John Doe",
-    payer_email="john@example.com",
-    payer_phone="9999999999",
-    title="Admission Fee",
-    description="Hostel admission fee for 2025",
-    send_email=True
-)
+After saving, click **Test Connection** to verify credentials against Cashfree API.
 
-print("Payment Link:", link["link_url"])
+---
+
+## 5. Step 3 – ERPNext Accounts Setup
+
+### 5.1 Bank (Transit) Account
+
+**Path:** Accounting → Chart of Accounts → [Company] → Bank → New Account
+
+- **Account Name:** `Cashfree - <Company Abbr>` (e.g. `Cashfree - HKP`)
+- **Account Type:** `Bank`
+- **Company:** The hostel company
+
+### 5.2 Mode of Payment
+
+**Path:** Accounting → Mode of Payment → New
+
+- **Mode of Payment:** `Cashfree`
+- **Type:** `Bank`
+
+---
+
+## 6. Step 4 – Per-Hostel Configuration
+
+Since Cashfree Settings records are keyed by `company`, the gateway is automatically resolved per hostel without needing a `Payment Gateway Config` record. However, if a hostel switches between Cashfree and another gateway, use:
+
+**Path:** ERPNext Desk → Payments → Payment Gateway Config → New
+
+| Field | Value |
+|---|---|
+| Company | `Hostel Koramangala Pvt Ltd` |
+| Preferred Payment Gateway | `Cashfree` |
+| Merchant Name (Override) | `Hostel-Koramangala` (the Cashfree Settings `gateway_name`) |
+
+---
+
+## 7. Step 5 – Configure Cashfree Webhooks
+
+### 7.1 Find the Webhook URL
+
+Open the Cashfree Settings record → copy the **Webhook URL** field. It looks like:
+```
+https://<your-site>/api/method/payments.payment_gateways.doctype.cashfree_settings.cashfree_settings.cashfree_webhook
 ```
 
-### Test 3: Shopping Cart
+> **Note:** Unlike CCAvenue/Easebuzz, the Cashfree webhook URL does **not** include a `?merchant=` parameter. The handler resolves the settings by `order_id` → Integration Request → `company`.
 
-1. Enable Shopping Cart in Website Settings
-2. Add items to cart as a customer
-3. Proceed to checkout
-4. Complete payment
-5. Verify order is created
+### 7.2 Configure in Cashfree Dashboard
 
-### Test 4: Webhooks
+**Cashfree Dashboard → Developers → Webhooks → Add Endpoint**
 
-1. Make a test payment
-2. Check **Integration Request** list for status updates
-3. Check Error Log if webhooks fail
-4. Verify `on_payment_authorized` is called on invoice
+| Setting | Value |
+|---|---|
+| Endpoint URL | The webhook URL from Step 7.1 |
+| Events | ✓ `PAYMENT_SUCCESS_WEBHOOK` ✓ `PAYMENT_FAILED_WEBHOOK` |
+| Version | `2023-08-01` (or latest) |
 
----
+### 7.3 Handled webhook events
 
-## 🏢 Usage by Company
-
-The system automatically selects the correct Cashfree account based on the company:
-
-```python
-payment_details = {
-    "amount": 10000,
-    "currency": "INR",
-    "company": "Hostel 1",  # ← Determines which Cashfree account to use
-    "reference_doctype": "Sales Invoice",
-    "reference_docname": "INV-001",
-    "payer_email": "student@example.com",
-    "payer_name": "John Doe",
-    "payer_phone": "9876543210",
-    "title": "Hostel Fee Payment",
-    "description": "Monthly hostel fee"
-}
-
-from payments.utils import get_payment_gateway_controller
-controller = get_payment_gateway_controller("Cashfree-Hostel1")
-url = controller.get_payment_url(**payment_details)
-```
+| Event | Action |
+|---|---|
+| `PAYMENT_SUCCESS_WEBHOOK` (order_status = PAID) | Integration Request → `Completed` → `on_payment_authorized` |
+| `PAYMENT_FAILED_WEBHOOK` | Integration Request → `Failed` |
 
 ---
 
-## 🔐 Production Deployment
+## 8. Step 6 – Test the Integration
 
-### 1. Get Production Credentials
+### 8.1 Test Connection
 
-1. Complete KYC verification in Cashfree Dashboard
-2. Get production App ID and Secret Key
-3. Test in production with small amounts first
+In the Cashfree Settings record, click **Test Connection**.
 
-### 2. Update Settings
+### 8.2 Create a Test Payment Link
 
-1. Go to your Cashfree Settings
-2. Change Environment to: `Production`
-3. Update Client ID and Client Secret with production credentials
-4. Save
+Click **Create Test Payment Link** (available on saved records) to generate a test link and verify the API is working.
 
-### 3. Update Webhook URL
+### 8.3 Sandbox test credentials
 
-1. Update webhook URL in Cashfree Production Dashboard
-2. Ensure your site has HTTPS (required for webhooks)
-3. Test webhook delivery
+Use credentials from the [Cashfree Sandbox Dashboard](https://test.cashfree.com):
+- Set `environment = Sandbox` on the Settings record
 
----
+### 8.4 Test payment methods (sandbox)
 
-## 📊 Monitoring
+| Method | Details |
+|---|---|
+| UPI | `success@cashfree` |
+| Card | Use Cashfree sandbox test cards |
+| Net Banking | Select any bank in sandbox mode |
 
-### Check Payment Status
+### 8.5 End-to-End Flow
 
-1. **Integration Request List**: Shows all payment attempts
-2. **Payment Entry**: Created automatically on successful payment
-3. **Error Log**: Shows any errors during payment processing
-
-### Cashfree Dashboard
-
-- View transactions: Cashfree Dashboard > Transactions
-- Check settlements: Dashboard > Settlements
-- Webhook logs: Dashboard > Developers > Webhooks
+1. Payment request created → `get_payment_url()` → `/cashfree_checkout` page
+2. User pays via Cashfree JS SDK
+3. SDK success → `make_payment(order_id, payment_session_id, ...)` called
+4. Server fetches order status from Cashfree API → `PAID`
+5. Integration Request → `Completed`
+6. `on_payment_authorized` → Payment Entry created
 
 ---
 
-## 🐛 Troubleshooting
+## 9. Troubleshooting
 
-### Issue: "No Cashfree Settings found"
-**Solution:** Create at least one Cashfree Settings with "Is Default" checked
-
-### Issue: Webhook not received
-**Solutions:**
-- Verify webhook URL is correct in Cashfree Dashboard
-- Check site is accessible from internet (not localhost)
-- Use ngrok for local testing
-- Check Error Log for webhook errors
-
-### Issue: Payment fails immediately
-**Solutions:**
-- Verify credentials (Client ID and Secret)
-- Check environment matches (Sandbox vs Production)
-- Review Integration Request for error details
-
-### Issue: "Invalid signature" in webhooks
-**Solutions:**
-- Ensure credentials match the account in Cashfree Dashboard
-- Check that webhook secret is correct
-- Verify environment setting
+| Problem | Cause | Solution |
+|---|---|---|
+| `No Cashfree Settings found` | No record for company, no default | Create a record with `company` linked or `is_default=1` |
+| Webhook signature fails | Wrong record resolved | Check `company` stored in Integration Request |
+| `payment_session_id` expired | 20-minute limit | Re-create order |
+| Test Connection fails | Wrong App ID or Secret | Verify in Cashfree Sandbox/Production dashboard |
+| Multiple `is_default` records | Misconfiguration | Save any Settings record — system auto-clears others |
+| Payment not confirmed | Order status not PAID | Check Cashfree dashboard for order status |
 
 ---
 
-## 📁 Files Created
+## 10. Differences from CCAvenue / Easebuzz / Razorpay
 
-```
-payments/
-├── pyproject.toml                                          # Updated with cashfree_pg dependency
-├── payment_gateways/
-│   └── doctype/
-│       └── cashfree_settings/
-│           ├── __init__.py
-│           ├── cashfree_settings.json                     # DocType definition
-│           ├── cashfree_settings.py                       # Main controller
-│           ├── cashfree_settings.js                       # Client script
-│           ├── test_cashfree_settings.py                  # Unit tests
-│           └── README.md                                   # Documentation
-└── templates/
-    ├── pages/
-    │   ├── cashfree_checkout.py                           # Checkout page logic
-    │   └── cashfree_checkout.html                         # Checkout page template
-    └── includes/
-        └── cashfree_checkout.js                           # Checkout client script
-```
+| Feature | CCAvenue | Easebuzz | Razorpay | Cashfree |
+|---|---|---|---|---|
+| Settings doctype | Single | Single | Single | Multiple records |
+| Merchant doctype | `CCAvenue Merchant` | `Easebuzz Merchant` | `Razorpay Merchant` | None |
+| Multi-company pattern | Merchant records | Merchant records | Merchant records | Multiple Settings |
+| Checkout UX | Redirect / form post | Redirect to hosted page | In-page modal | In-page JS SDK |
+| `initiate_payment` API | ✓ | ✓ | ✓ | Not implemented |
+| `check_payment_status` API | ✓ | ✓ | ✓ | Not implemented |
+| Refund webhook | ✓ | ✓ | ✓ | Not implemented |
+| Payment Charges | ✓ | ✓ | ✓ | Not implemented |
+| Subscriptions | No | No | ✓ | No |
+| Currencies | Limited | INR only | 100+ | Multiple |
 
 ---
 
-## 🚀 Next Steps
+## 11. FAQ
 
-1. **Install SDK**: `bench pip install cashfree_pg`
-2. **Restart**: `bench restart`
-3. **Migrate**: `bench --site your-site migrate`
-4. **Configure**: Create Cashfree Settings records
-5. **Test**: Make a test payment in sandbox mode
-6. **Deploy**: Switch to production when ready
+**Q: Can I use Cashfree for some hostels and CCAvenue for others?**  
+A: Yes. Create `Payment Gateway Config` records per company to set the preferred gateway.
 
----
+**Q: Does Cashfree support split payments?**  
+A: Not currently implemented in this integration. Contact Cashfree for their split payment (Cashfree Route) product.
 
-## 📞 Support
+**Q: Where do I see payment logs?**  
+A: In ERPNext → Integration Requests. Filter by `integration_request_service = Cashfree`.
 
-- **Cashfree Documentation**: https://docs.cashfree.com/
-- **Cashfree Support**: https://www.cashfree.com/contact-us/
-- **ERPNext Forum**: https://discuss.erpnext.com/
+**Q: What is the `redirect_url` field?**  
+A: An optional URL to redirect the user to after payment completion on the checkout page.
 
----
-
-## ✅ Features Implemented
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Multiple Accounts | ✅ | One per company |
-| Default Fallback | ✅ | Site-wide default |
-| Sandbox Support | ✅ | For testing |
-| Production Support | ✅ | For live payments |
-| Invoice Payment | ✅ | Via Payment Request |
-| Shopping Cart | ✅ | Auto-integration |
-| Payment Links | ✅ | Email/SMS support |
-| Webhooks | ✅ | Real-time updates |
-| Guest Payments | ✅ | Token-based |
-| Signature Verification | ✅ | Security |
-| Error Logging | ✅ | Debugging |
-| Multi-currency | ✅ | INR, USD, EUR, etc. |
-
----
-
-## 🎓 Example Usage Scenarios
-
-### Scenario 1: Student Pays Invoice
-1. Admin creates Sales Invoice for student
-2. Student clicks "Pay Now" in portal
-3. System selects Hostel's Cashfree account
-4. Student completes payment
-5. Invoice marked as paid automatically
-
-### Scenario 2: Payment Link for Admission
-1. Admin creates payment link via console/API
-2. Link sent to prospective student's email
-3. Student (guest) clicks link and pays
-4. Webhook updates status
-5. Admin notified, customer record created
-
-### Scenario 3: Shopping Cart Purchase
-1. Student browses hostel store
-2. Adds items to cart (mattress, supplies)
-3. Proceeds to checkout
-4. Pays via Cashfree
-5. Order created automatically
-
----
-
-**Implementation Date:** 16 November 2025  
-**Version:** 1.0.0  
-**Status:** ✅ Ready for Testing
+**Q: How does the webhook determine which Settings record to use?**  
+A: The webhook looks up the Integration Request by `order_id`, reads the `company` from its data, then calls `get_cashfree_settings_by_company(company)` to find the right Settings record and client secret for signature verification.

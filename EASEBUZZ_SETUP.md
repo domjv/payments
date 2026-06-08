@@ -1,244 +1,238 @@
-# Easebuzz Payment Gateway - Quick Setup Guide
+# Easebuzz Payment Gateway – Administrator Setup Guide
 
-## Overview
-This integration provides Easebuzz payment gateway support for ERPNext with multi-merchant configuration, similar to the CCAvenue integration.
-
-## Features
-- ✅ Multi-merchant support with company-based routing
-- ✅ Default merchant fallback
-- ✅ API-based integration for NextJS/React Native
-- ✅ iFrame/WebView support
-- ✅ Hash verification (SHA-512)
-- ✅ Webhook callbacks
-- ✅ Payment status tracking
-
-## Quick Setup
-
-### 1. Install Dependencies
-The integration uses Python's `requests` library which should already be available in Frappe.
-
-### 2. Run Migrations
-```bash
-cd /path/to/frappe-bench
-bench migrate
-```
-
-This will create the following DocTypes:
-- Easebuzz Settings
-- Easebuzz Merchant
-
-### 3. Configure Easebuzz Settings
-
-Navigate to: **Payment Gateways > Easebuzz Settings**
-
-Configure:
-- **Merchant Key**: Your default merchant key from Easebuzz
-- **Salt**: Your default salt from Easebuzz
-- **Environment**: Select "Test" or "Production"
-- **Redirect To** (Optional): External frontend URL for payment callbacks
-- **Header Image** (Optional): Logo URL for checkout page
-
-Click **Save**.
-
-### 4. Create Merchant Configuration
-
-Navigate to: **Payment Gateways > Easebuzz Merchant**
-
-Click **New** and fill:
-- **Merchant Name**: e.g., "Default Merchant" or "Campus A"
-- **Is Default Merchant**: Check this for your primary merchant
-- **Merchant Key**: From Easebuzz dashboard
-- **Salt**: From Easebuzz dashboard
-- **Environment**: Test or Production
-- **Company** (Optional): Link to specific company
-- **Bank Account** (Optional): Bank account prefix
-- **Debtors Account** (Optional): Debtors account prefix
-
-Click **Save**.
-
-### 5. Test Connection
-
-In the Easebuzz Merchant form, click **Test Connection** button to verify credentials.
-
-## Usage
-
-### API Integration (for NextJS/React Native Frontends)
-
-#### Initiate Payment
-```javascript
-const response = await fetch('/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.initiate_payment', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    amount: 1000.00,
-    reference_doctype: 'Sales Invoice',
-    reference_docname: 'SINV-001',
-    payer_email: 'customer@example.com',
-    payer_name: 'CUST-001',
-    description: 'Payment for Invoice',
-    phone: '9876543210'
-  })
-});
-
-const data = await response.json();
-if (data.message.success) {
-  window.location.href = data.message.payment_url;
-}
-```
-
-#### Check Payment Status
-```javascript
-const response = await fetch(
-  '/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.check_payment_status' +
-  '?integration_request_name=' + integrationId
-);
-
-const data = await response.json();
-console.log(data.message.status); // 'Completed' or 'Failed'
-```
-
-## Multi-Merchant Configuration
-
-### Scenario: Multiple Companies
-
-If you have multiple companies (e.g., Campus A, Campus B):
-
-1. **Create Default Merchant**:
-   - Merchant Name: "Default Merchant"
-   - Is Default: ✓ (checked)
-   - No company link (works for all)
-
-2. **Create Company-Specific Merchants**:
-   - Merchant Name: "Campus A Merchant"
-   - Is Default: ✗ (unchecked)
-   - Company: Campus A
-   
-   - Merchant Name: "Campus B Merchant"
-   - Is Default: ✗ (unchecked)
-   - Company: Campus B
-
-The system will automatically route payments to the correct merchant based on the company field in the payment request.
-
-## Webhook Configuration (Optional)
-
-Configure these webhooks in your Easebuzz dashboard:
-
-1. **Success URL**:
-   ```
-   https://your-site.com/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.verify_transaction?merchant={merchant_name}
-   ```
-
-2. **Failure URL**:
-   ```
-   https://your-site.com/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.verify_transaction?merchant={merchant_name}
-   ```
-
-Replace `{merchant_name}` with your actual merchant name.
-
-## Testing
-
-### Test Mode
-1. Set Environment to "Test" in Easebuzz Merchant
-2. Use test credentials from Easebuzz
-3. Test payments will not process real money
-
-### Test Payment
-```bash
-# Via bench console
-bench console
-
-# In console
-import frappe
-from payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings import initiate_payment
-
-result = initiate_payment(
-    amount=10.00,
-    reference_doctype='Sales Invoice',
-    reference_docname='SINV-TEST-001',
-    payer_email='test@example.com',
-    payer_name='Test Customer',
-    phone='9999999999'
-)
-
-print(result)
-```
-
-## Troubleshooting
-
-### Payment initiation fails
-- **Check**: Merchant credentials are correct
-- **Check**: Environment setting matches your Easebuzz account (Test/Production)
-- **Check**: Error Log doctype for detailed errors
-
-### Hash verification fails
-- **Check**: Salt is correctly configured and matches Easebuzz
-- **Check**: No extra spaces in merchant key or salt
-
-### Payment not updating in ERPNext
-- **Check**: Integration Request document for payment details
-- **Check**: `on_payment_authorized` method exists in reference doctype
-- **Check**: Error logs for callback processing errors
-
-### Multi-merchant not working
-- **Check**: Company field is set in payment request
-- **Check**: Merchant has correct company linked
-- **Check**: At least one merchant is marked as default
-
-## File Structure
-
-```
-payments/
-├── payment_gateways/
-│   └── doctype/
-│       ├── easebuzz_settings/
-│       │   ├── __init__.py
-│       │   ├── easebuzz_settings.json
-│       │   ├── easebuzz_settings.py      # Main controller
-│       │   ├── easebuzz_settings.js      # Form script
-│       │   └── easebuzz_utils.py         # Utility functions
-│       └── easebuzz_merchant/
-│           ├── __init__.py
-│           ├── easebuzz_merchant.json
-│           ├── easebuzz_merchant.py      # Merchant controller
-│           └── easebuzz_merchant.js      # Form script
-├── templates/
-│   └── pages/
-│       ├── easebuzz_checkout.html        # Checkout page template
-│       └── easebuzz_checkout.py          # Checkout controller
-└── public/
-    └── js/
-        └── easebuzz.js                   # Frontend helper
-```
-
-## API Reference
-
-See [EASEBUZZ_INTEGRATION.md](EASEBUZZ_INTEGRATION.md) for complete API documentation.
-
-## Support
-
-- **Easebuzz Docs**: https://docs.easebuzz.in/
-- **ERPNext Forum**: https://discuss.erpnext.com/
-- **GitHub Issues**: [Your repo URL]
-
-## License
-
-MIT License - See LICENSE file
+> **Audience:** System Administrators and ERPNext Implementors  
+> **Last updated:** June 2026  
+> **Supersedes:** previous EASEBUZZ_SETUP.md
 
 ---
 
-**Created**: 2025-01-27  
-**Version**: 1.0.0  
-**Compatibility**: ERPNext v14+, Frappe v14+
-└── payment_gateways/
-    └── doctype/
-        ├── easebuzz_settings/
-        │   ├── __init__.py
-        │   ├── easebuzz_settings.json
-        │   ├── easebuzz_settings.py      # Main controller with API endpoints
-        │   ├── easebuzz_settings.js      # Form script
-        │   └── easebuzz_utils.py         # Utility functions
-        └── easebuzz_merchant/
-            ├── __init__.py
-            ├── easebuzz_merchant.json
-            ├── easebuzz_merchant.py      # Merchant controller
-            └── easebuzz_merchant.js      # Form script
+## Table of Contents
+
+1. [Prerequisites](#1-prerequisites)
+2. [Architecture Overview](#2-architecture-overview)
+3. [Step 1 – Configure Easebuzz Settings (Global Fallback)](#3-step-1--configure-easebuzz-settings-global-fallback)
+4. [Step 2 – Create Easebuzz Merchant Records](#4-step-2--create-easebuzz-merchant-records)
+5. [Step 3 – ERPNext Accounts Setup](#5-step-3--erpnext-accounts-setup)
+6. [Step 4 – Per-Hostel Gateway Selection](#6-step-4--per-hostel-gateway-selection)
+7. [Step 5 – Configure Easebuzz Webhooks](#7-step-5--configure-easebuzz-webhooks)
+8. [Step 6 – Split Payments (Easy Split)](#8-step-6--split-payments-easy-split)
+9. [Step 7 – Test the Integration](#9-step-7--test-the-integration)
+10. [Troubleshooting](#10-troubleshooting)
+11. [FAQ](#11-faq)
+
+---
+
+## 1. Prerequisites
+
+- ERPNext with the `payments` app installed and migrated
+- An Easebuzz merchant account ([register at easebuzz.in](https://easebuzz.in))
+- From the Easebuzz dashboard, collect:
+  - **Merchant Key** (API key)
+  - **Salt** (secret for hash generation)
+- Environment: Test for testing, Production for live
+
+---
+
+## 2. Architecture Overview
+
+```
+Customer (Hostel)
+      │ custom_hostel_name → Company
+      ▼
+Payment Gateway Config (one per company) → preferred_gateway = Easebuzz
+      ▼
+Easebuzz Merchant (one per company/hostel)
+      │  merchant_key  +  salt
+      │  environment  +  company  +  bank_account  +  debtors_account
+      │  split_payments (child table – Easy Split)
+      ▼
+Easebuzz Payment Gateway (SHA-512 hash verification)
+```
+
+**Merchant resolution** (priority):
+1. Explicit `custom_merchant_name` in payment request
+2. `Easebuzz Merchant` where `company` matches
+3. `Easebuzz Merchant` with `Is Default Merchant`
+4. Throws if none found
+
+---
+
+## 3. Step 1 – Configure Easebuzz Settings (Global Fallback)
+
+**Path:** ERPNext Desk → Payments → Easebuzz Settings
+
+| Field | Description | Example |
+|---|---|---|
+| Merchant Key | Global fallback API key | `abc123merchant` |
+| Salt | Global fallback salt | `mysecretsal` |
+| Environment | `Test` or `Production` | `Test` |
+| Redirect To | External frontend URL after payment | `https://app.example.com/payment` |
+| Header Image | Optional branding image (Data URL) | |
+
+> Click **Test Connection** after saving.  
+> **Tip:** For multi-hostel setups, leave these blank and manage everything via Merchant records.
+
+---
+
+## 4. Step 2 – Create Easebuzz Merchant Records
+
+**Path:** ERPNext Desk → Payments → Easebuzz Merchant → New
+
+| Field | Description | Required | Example |
+|---|---|---|---|
+| Merchant Name | Unique identifier | ✓ | `Hostel-Koramangala` |
+| Is Default Merchant | Fallback when no company match | | ☑ on one record only |
+| Merchant Key | Easebuzz API key | ✓ | `eb_live_xxxx` |
+| Salt | Easebuzz salt | ✓ | `my_salt_value` |
+| Environment | `Test` or `Production` | ✓ | `Production` |
+| Company | Link to ERPNext Company | | `Hostel Koramangala Pvt Ltd` |
+| Bank Account | Prefix of GL bank account | | `Easebuzz` |
+| Debtors Account | Prefix of GL receivable account | | `Debtors` |
+
+### Notes
+
+- `Bank Account` and `Debtors Account` are prefixes — company abbreviation is appended automatically (e.g. `Easebuzz` → `Easebuzz - HKP`).
+- Merchant credentials (key + salt) take priority over global Settings credentials.
+
+---
+
+## 5. Step 3 – ERPNext Accounts Setup
+
+### 5.1 Bank (Transit) Account
+
+**Path:** Accounting → Chart of Accounts → [Company] → Bank → New Account
+
+- **Account Name:** `Easebuzz - <Company Abbr>` (e.g. `Easebuzz - HKP`)
+- **Account Type:** `Bank`
+- **Company:** The hostel company
+
+Set the **Bank Account** prefix on the Merchant record to `Easebuzz`.
+
+### 5.2 Mode of Payment
+
+**Path:** Accounting → Mode of Payment → New
+
+- **Mode of Payment:** `Easebuzz`
+- **Type:** `Bank`
+
+---
+
+## 6. Step 4 – Per-Hostel Gateway Selection
+
+**Path:** ERPNext Desk → Payments → Payment Gateway Config → New
+
+| Field | Value |
+|---|---|
+| Company | `Hostel Koramangala Pvt Ltd` |
+| Preferred Payment Gateway | `Easebuzz` |
+| Merchant Name (Override) | `Hostel-Koramangala` (optional) |
+
+---
+
+## 7. Step 5 – Configure Easebuzz Webhooks
+
+In the **Easebuzz Dashboard → Account → API Details**, set:
+
+| Parameter | Value |
+|---|---|
+| Success URL (surl) | `https://<site>/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.verify_transaction?merchant=<Merchant-Name>` |
+| Failure URL (furl) | Same as surl (the handler checks the status field) |
+| Webhook URL | `https://<site>/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.webhook_callback?merchant=<Merchant-Name>` |
+
+> Replace `<Merchant-Name>` with the exact name from the `Easebuzz Merchant` record (e.g. `Hostel-Koramangala`).
+
+### Optional: Refund webhook
+
+| Webhook | URL |
+|---|---|
+| Refund status | `.../refund_status?merchant=<Merchant-Name>` |
+
+### How `?merchant=` works
+
+The `?merchant=` query parameter selects which merchant's salt to use for hash verification. Without it, the system falls back to the company-matched or default merchant.
+
+---
+
+## 8. Step 6 – Split Payments (Easy Split)
+
+Easy Split allows a single payment to be split across multiple sub-merchants automatically.
+
+### 8.1 Obtain Easy Split labels
+
+Contact Easebuzz support to get sub-merchant labels for your account.
+
+### 8.2 Configure on Merchant record
+
+In the **Easebuzz Merchant** record → **Easy Split Payments** section:
+
+| Field | Description | Example |
+|---|---|---|
+| Label | Easebuzz sub-merchant label | `label_hostel_a` |
+| Split Percent | Percentage of payment to route | `70` (= 70%) |
+
+Add one row per sub-merchant. The percentages should total 100%.
+
+### 8.3 How it works
+
+The system computes absolute amounts from percentages and includes them in the payment POST body. Easebuzz internally distributes the funds.
+
+---
+
+## 9. Step 7 – Test the Integration
+
+### 9.1 Test Connection
+
+From any Easebuzz Merchant record, click **Test Connection**.
+
+### 9.2 Test card details (Easebuzz sandbox)
+
+| Type | Details |
+|---|---|
+| Card number | `4111 1111 1111 1111` |
+| Expiry | Any future date |
+| CVV | Any 3 digits |
+| OTP | `123456` |
+
+### 9.3 End-to-End Test
+
+1. Call `initiate_payment` with a Sales Invoice reference
+2. Redirect browser to returned `payment_url`
+3. Complete sandbox payment
+4. Easebuzz POSTs to `verify_transaction?merchant=<name>`
+5. Verify Integration Request → `Completed`
+6. Verify Payment Entry created with:
+   - Mode of Payment: `Easebuzz`
+   - Paid To: `Easebuzz - <Abbr>`
+   - Reference No: `easepayid` from Easebuzz
+
+---
+
+## 10. Troubleshooting
+
+| Problem | Cause | Solution |
+|---|---|---|
+| Hash mismatch in `verify_transaction` | Wrong salt on merchant record | Verify salt matches Easebuzz dashboard exactly |
+| `initiate_payment` fails | Easebuzz API rejected request | Check Error Log → `easebuzz_utils.initiate_payment_api` |
+| Payment Entry not created | GL account `Easebuzz - {abbr}` missing | Create bank account (Step 5.1) |
+| UDF values truncated | Special chars or long docnames | `_udf_sanitize()` limits to 300 chars and replaces invalid chars |
+| Split payment amounts wrong | Percentages don't add up | Ensure split_payments totals 100% |
+| `webhook_callback` not called | URL not configured in Easebuzz dashboard | Set Webhook URL in Easebuzz → API Details |
+
+---
+
+## 11. FAQ
+
+**Q: Can a hostel use both a merchant key AND the global Settings key?**  
+A: Yes. If a Merchant record has a key/salt, those take priority. If they're blank, the global Settings key/salt are used.
+
+**Q: What is the difference between `verify_transaction` and `webhook_callback`?**  
+A: `verify_transaction` is the browser redirect (surl/furl) — the user's browser POSTs to it after payment. `webhook_callback` is a server-to-server JSON webhook called by Easebuzz independently. Both are duplicate-safe; whichever fires first processes the payment.
+
+**Q: Are Payment Charges (surcharges) applied?**  
+A: Yes. Active `Payment Charge` records are applied in `create_payment_request_data()` before the Easebuzz API call.
+
+**Q: What currencies does Easebuzz support?**  
+A: INR only.
+
+**Q: What is `redirect_to` in the Merchant record?**  
+A: An external frontend URL. After payment is verified, the user is redirected to this URL with `?integration_id=<name>` appended. The frontend can then call `check_payment_status` to get the full result.

@@ -1,0 +1,166 @@
+{
+  "info": {
+    "name": "Easebuzz Payment Gateway – Ivy Living",
+    "description": "Multi-merchant Easebuzz API endpoints for the Ivy Living hostel management application.\n\nSet the `baseUrl` collection variable to your ERPNext site URL.\nSet `merchantName` to the Easebuzz Merchant record name (e.g. `Hostel-Koramangala`).\n\nGuest endpoints require no auth. Desk endpoints require `Authorization: token <api_key>:<api_secret>`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000", "type": "string" },
+    { "key": "merchantName", "value": "Default", "type": "string" },
+    { "key": "integrationRequestName", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Payment Initiation",
+      "item": [
+        {
+          "name": "Initiate Payment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.initiate_payment",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.initiate_payment"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 500,\n  \"reference_doctype\": \"Sales Invoice\",\n  \"reference_docname\": \"SINV-0001\",\n  \"payer_email\": \"student@example.com\",\n  \"payer_name\": \"CUST-00001\",\n  \"currency\": \"INR\",\n  \"company\": \"Hostel Koramangala Pvt Ltd\",\n  \"description\": \"Payment for Invoice SINV-0001\",\n  \"phone\": \"9876543210\"\n}"
+            },
+            "description": "Creates an Easebuzz payment link via the Easebuzz initiateLink API.\n\nSuccess response:\n- `payment_token` – Integration Request name (save for status polling)\n- `payment_url` – URL to redirect user to (hosted Easebuzz payment page)\n- `txnid` – Transaction ID\n- `merchant_name` – Resolved merchant record name\n- `company` – Company associated with this payment"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.message && json.message.payment_token) {",
+                  "  pm.collectionVariables.set('integrationRequestName', json.message.payment_token);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Check Payment Status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.check_payment_status?integration_request_name={{integrationRequestName}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.check_payment_status"],
+              "query": [{ "key": "integration_request_name", "value": "{{integrationRequestName}}" }]
+            },
+            "description": "Poll payment status after redirect. Returns enriched status information.\n\nResponse fields:\n- `status` – IR status: Queued | Authorized | Completed | Failed\n- `payment_status` – Easebuzz raw status (success | failure | pending)\n- `transaction_id` – Easebuzz easepayid\n- `bank_ref_no` – Bank reference number\n- `payment_mode` – Payment method used\n- `reference_doctype` / `reference_docname` – Source document"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhooks / Callbacks",
+      "item": [
+        {
+          "name": "Verify Transaction (browser redirect – JSON mode)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.verify_transaction?merchant={{merchantName}}&return_json=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.verify_transaction"],
+              "query": [
+                { "key": "merchant", "value": "{{merchantName}}" },
+                { "key": "return_json", "value": "1" }
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "status", "value": "success" },
+                { "key": "txnid", "value": "INT-00123" },
+                { "key": "easepayid", "value": "EASE123456" },
+                { "key": "amount", "value": "500.0" },
+                { "key": "email", "value": "student@example.com" },
+                { "key": "firstname", "value": "Test Student" },
+                { "key": "productinfo", "value": "Payment" },
+                { "key": "udf1", "value": "Sales Invoice" },
+                { "key": "udf2", "value": "SINV-0001" },
+                { "key": "udf3", "value": "INT-00123" },
+                { "key": "udf4", "value": "student@example.com" },
+                { "key": "udf5", "value": "Hostel-Koramangala" },
+                { "key": "hash", "value": "<computed_sha512_hash>" },
+                { "key": "bank_ref_num", "value": "BANK789" },
+                { "key": "mode", "value": "NB" }
+              ]
+            },
+            "description": "Browser surl/furl redirect from Easebuzz. With `return_json=1`, returns JSON instead of redirecting.\n\nWithout `return_json`, the browser is redirected to `redirect_to`."
+          }
+        },
+        {
+          "name": "Webhook Callback (S2S JSON)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.webhook_callback?merchant={{merchantName}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.webhook_callback"],
+              "query": [{ "key": "merchant", "value": "{{merchantName}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"success\",\n  \"txnid\": \"INT-00123\",\n  \"easepayid\": \"EASE123456\",\n  \"amount\": \"500.00\",\n  \"email\": \"student@example.com\",\n  \"firstname\": \"Test Student\",\n  \"productinfo\": \"Payment\",\n  \"udf1\": \"Sales Invoice\",\n  \"udf2\": \"SINV-0001\",\n  \"udf3\": \"INT-00123\",\n  \"udf4\": \"student@example.com\",\n  \"udf5\": \"Hostel-Koramangala\",\n  \"hash\": \"<computed_sha512_hash>\",\n  \"bank_ref_num\": \"BANK789\",\n  \"mode\": \"NB\"\n}"
+            },
+            "description": "Server-to-server JSON webhook from Easebuzz. Duplicate-safe. Configure as webhook URL in Easebuzz dashboard."
+          }
+        },
+        {
+          "name": "Refund Status",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.refund_status?merchant={{merchantName}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.refund_status"],
+              "query": [{ "key": "merchant", "value": "{{merchantName}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"txnid\": \"INT-00123\",\n  \"refund_id\": \"REF-001\",\n  \"refund_status\": \"SUCCESS\",\n  \"refund_amount\": \"500.00\",\n  \"udf5\": \"Hostel-Koramangala\"\n}"
+            },
+            "description": "Easebuzz refund status webhook. Calls `on_refund_status_update` on the reference document."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Utility",
+      "item": [
+        {
+          "name": "Test Connection",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "token <api_key>:<api_secret>" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_utils.test_connection",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "method", "payments.payment_gateways.doctype.easebuzz_settings.easebuzz_utils.test_connection"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchant_key\": \"eb_live_xxxx\",\n  \"salt\": \"my_salt_value\",\n  \"environment\": \"Test\"\n}"
+            },
+            "description": "Validate Easebuzz credentials. Requires System Manager auth."
+          }
+        }
+      ]
+    }
+  ]
+}

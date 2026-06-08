@@ -2,14 +2,19 @@ openapi: 3.1.0
 
 info:
   title: Ivy Living – Payment Gateway API
-  version: 1.0.0
+  version: 2.0.0
   description: |
     Multi-gateway payment API for the Ivy Living hostel management system.
-    Supports CCAvenue, Easebuzz and Razorpay with per-company/hostel routing.
+    Supports CCAvenue, Easebuzz, Razorpay, and Cashfree with per-company/hostel routing.
 
     **Authentication:** Guest endpoints (`allow_guest=True`) require no auth.
     All other endpoints require an `Authorization: token <api_key>:<api_secret>` header
     or a valid Frappe session cookie.
+
+    **Base URL pattern for all whitelisted methods:**
+    ```
+    https://{site}/api/method/payments.payment_gateways.doctype.{gateway}_settings.{gateway}_settings.{function_name}
+    ```
 
 servers:
   - url: https://{site}
@@ -22,9 +27,11 @@ tags:
   - name: Razorpay
     description: Razorpay multi-merchant payment endpoints
   - name: Easebuzz
-    description: Easebuzz payment endpoints
+    description: Easebuzz multi-merchant payment endpoints
   - name: CCAvenue
-    description: CCAvenue payment endpoints
+    description: CCAvenue multi-merchant payment endpoints
+  - name: Cashfree
+    description: Cashfree multi-instance payment endpoints
   - name: Common
     description: Multi-gateway and utility endpoints
 
@@ -44,13 +51,14 @@ components:
           type: string
           example: "Missing required parameter: payer_email"
 
-    RazorpayInitiateRequest:
+    # ------ Shared Initiate Request ------
+    InitiatePaymentRequest:
       type: object
       required: [amount, reference_doctype, reference_docname, payer_email, payer_name]
       properties:
         amount:
           type: number
-          description: Payment amount in major currency units (e.g. INR). Payment Charges are added server-side.
+          description: Payment amount in major currency units (INR). Payment Charges are added server-side.
           example: 500.00
         reference_doctype:
           type: string
@@ -76,7 +84,7 @@ components:
           example: "Hostel Koramangala Pvt Ltd"
         custom_merchant_name:
           type: string
-          description: Explicit Razorpay Merchant record name (optional override)
+          description: Explicit Merchant record name override
           example: "Hostel-Koramangala"
         description:
           type: string
@@ -85,6 +93,44 @@ components:
           type: string
           example: "9999999999"
 
+    # ------ Shared Status Response ------
+    PaymentStatusResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        status:
+          type: string
+          enum: [Queued, Authorized, Completed, Failed]
+          description: Integration Request status
+        payment_status:
+          type: string
+          description: Raw gateway payment status string
+        transaction_id:
+          type: string
+          description: Gateway transaction / payment ID
+        bank_ref_no:
+          type: string
+          description: Bank reference number
+        payment_mode:
+          type: string
+          description: Payment method used (Net Banking, UPI, Card, etc.)
+        error_message:
+          type: string
+        reference_doctype:
+          type: string
+        reference_docname:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+        company:
+          type: string
+        merchant_name:
+          type: string
+
+    # ------ Razorpay ------
     RazorpayInitiateResponse:
       type: object
       properties:
@@ -93,7 +139,7 @@ components:
           example: true
         payment_token:
           type: string
-          description: Integration Request name – use as `token` in verify_payment
+          description: Integration Request name
           example: "INT-00123"
         order_id:
           type: string
@@ -101,11 +147,11 @@ components:
           example: "order_NxxxxxxxxxXXXXX"
         api_key:
           type: string
-          description: Razorpay API key (public) – pass to Checkout.js
+          description: Razorpay API key (public)
           example: "rzp_live_xxxxxxxxxxxxxxx"
         amount:
           type: integer
-          description: Amount in paise (1 INR = 100 paise) – pass to Checkout.js
+          description: Amount in paise (1 INR = 100 paise)
           example: 50000
         currency:
           type: string
@@ -119,7 +165,6 @@ components:
         environment:
           type: string
           enum: [Test, Production]
-          example: "Production"
         prefill:
           type: object
           properties:
@@ -136,7 +181,6 @@ components:
       properties:
         razorpay_payment_id:
           type: string
-          description: From Checkout.js payment.success handler
           example: "pay_NxxxxxxxxxXXXXX"
         razorpay_order_id:
           type: string
@@ -147,7 +191,7 @@ components:
           example: "abc123..."
         token:
           type: string
-          description: payment_token from initiate_payment response
+          description: payment_token from initiate_payment
           example: "INT-00123"
 
     RazorpayVerifyResponse:
@@ -162,37 +206,171 @@ components:
           type: string
         redirect_to:
           type: string
-          description: URL to redirect the user to after payment
         reference_doctype:
           type: string
         reference_docname:
           type: string
 
-    PaymentStatusResponse:
+    # ------ CCAvenue ------
+    CCAvenueInitiateResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        payment_token:
+          type: string
+          description: Integration Request name
+          example: "INT-00123"
+        payment_url:
+          type: string
+          description: Full CCAvenue payment API URL
+          example: "https://secure.ccavenue.com/transaction/transaction.do?command=initiateTransaction"
+        encrypted_data:
+          type: string
+          description: AES-128-CBC encrypted payment payload
+        access_code:
+          type: string
+          description: CCAvenue Access Code to include in form POST
+        merchant_id:
+          type: string
+          description: CCAvenue Merchant ID
+        merchant_name:
+          type: string
+          description: Resolved CCAvenue Merchant record name
+        api_url:
+          type: string
+          description: Alias for payment_url
+        iframe_url:
+          type: string
+          description: URL for embedding in an iframe
+        company:
+          type: string
+        order_id:
+          type: string
+
+    # ------ Easebuzz ------
+    EasebuzzInitiateResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        payment_token:
+          type: string
+          description: Integration Request name
+          example: "INT-00123"
+        payment_url:
+          type: string
+          description: Easebuzz hosted payment page URL
+          example: "https://pay.easebuzz.in/pay/..."
+        txnid:
+          type: string
+          description: Transaction ID (= Integration Request name)
+          example: "INT-00123"
+        merchant_name:
+          type: string
+          example: "Hostel-Koramangala"
+        company:
+          type: string
+          example: "Hostel Koramangala Pvt Ltd"
+
+    EasebuzzWebhookPayload:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success, failure, pending]
+        txnid:
+          type: string
+        easepayid:
+          type: string
+        amount:
+          type: string
+        email:
+          type: string
+        firstname:
+          type: string
+        productinfo:
+          type: string
+        udf1:
+          type: string
+          description: reference_doctype
+        udf2:
+          type: string
+          description: reference_docname
+        udf3:
+          type: string
+          description: Integration Request name (token)
+        udf4:
+          type: string
+          description: Frappe user
+        udf5:
+          type: string
+          description: merchant_name
+        hash:
+          type: string
+          description: SHA-512 reverse hash for verification
+        bank_ref_num:
+          type: string
+        mode:
+          type: string
+
+    EasebuzzWebhookResponse:
       type: object
       properties:
         success:
           type: boolean
         status:
           type: string
-          enum: [Queued, Authorized, Completed, Failed]
-        payment_id:
+        transaction_id:
           type: string
-        order_id:
-          type: string
-        amount:
-          type: number
-        currency:
+        payment_status:
           type: string
         reference_doctype:
           type: string
         reference_docname:
           type: string
-        company:
-          type: string
-        merchant_name:
+        redirect_to:
           type: string
 
+    # ------ Cashfree ------
+    CashfreeWebhookPayload:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [PAYMENT_SUCCESS_WEBHOOK, PAYMENT_FAILED_WEBHOOK]
+        data:
+          type: object
+          properties:
+            order:
+              type: object
+              properties:
+                order_id:
+                  type: string
+                order_status:
+                  type: string
+                  enum: [PAID, ACTIVE, EXPIRED]
+                order_amount:
+                  type: number
+                order_currency:
+                  type: string
+            payment:
+              type: object
+              properties:
+                cf_payment_id:
+                  type: string
+                payment_status:
+                  type: string
+                payment_amount:
+                  type: number
+                payment_method:
+                  type: object
+            customer_details:
+              type: object
+
+    # ------ Common ------
     CartSubmitRequest:
       type: object
       required: [cart, customer]
@@ -223,11 +401,11 @@ components:
           description: URL / token to initiate payment
         gateway:
           type: string
-          enum: [CCAvenue, Easebuzz, Razorpay]
+          enum: [CCAvenue, Easebuzz, Razorpay, Cashfree]
           description: Which gateway was selected for this customer's hostel
 
 # -----------------------------------------------------------------------
-# PATHS
+# PATHS – RAZORPAY
 # -----------------------------------------------------------------------
 paths:
 
@@ -246,7 +424,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/RazorpayInitiateRequest"
+              $ref: "#/components/schemas/InitiatePaymentRequest"
       responses:
         "200":
           description: Payment initiated successfully
@@ -257,15 +435,6 @@ paths:
                 properties:
                   message:
                     $ref: "#/components/schemas/RazorpayInitiateResponse"
-        "200 (error)":
-          description: Validation or gateway error (HTTP 200 with success=false)
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    $ref: "#/components/schemas/ErrorResponse"
 
   /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.verify_payment:
     post:
@@ -273,8 +442,7 @@ paths:
       summary: Verify Razorpay Payment
       description: |
         Called by the frontend after Checkout.js fires `payment.success`.
-        Verifies the HMAC-SHA256 signature, restores the Frappe user session,
-        creates a Payment Entry and returns the redirect URL.
+        Verifies HMAC-SHA256 signature, creates Payment Entry, returns redirect URL.
       operationId: razorpay_verify_payment
       security: []
       requestBody:
@@ -296,9 +464,9 @@ paths:
 
   /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.check_payment_status:
     get:
-      tags: [Razorpay, Easebuzz, CCAvenue]
-      summary: Check Payment Status
-      description: Poll the current status of a payment by Integration Request name.
+      tags: [Razorpay]
+      summary: Check Razorpay Payment Status
+      description: Poll the current status of a Razorpay payment by Integration Request name.
       operationId: razorpay_check_payment_status
       security: []
       parameters:
@@ -326,7 +494,7 @@ paths:
       description: |
         Server-to-server webhook endpoint for Razorpay refund events.
         Configure in Razorpay Dashboard → Settings → Webhooks.
-        Verifies `X-Razorpay-Signature` and calls `on_refund_status_update` on the reference doc.
+        Verifies `X-Razorpay-Signature` and calls `on_refund_status_update`.
       operationId: razorpay_refund_status
       security: []
       parameters:
@@ -365,14 +533,645 @@ paths:
                       status:
                         type: string
 
+# -----------------------------------------------------------------------
+# PATHS – CCAVENUE
+# -----------------------------------------------------------------------
+
+  /api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.initiate_payment:
+    post:
+      tags: [CCAvenue]
+      summary: Initiate CCAvenue Payment
+      description: |
+        Creates an AES-128-CBC encrypted payment payload for CCAvenue.
+        The frontend must POST `encrypted_data` + `access_code` to the CCAvenue
+        payment API URL or embed it in an iframe.
+
+        Payment Charges are applied server-side.
+      operationId: ccavenue_initiate_payment
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InitiatePaymentRequest"
+      responses:
+        "200":
+          description: Encrypted payment payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    $ref: "#/components/schemas/CCAvenueInitiateResponse"
+
+  /api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.check_payment_status:
+    get:
+      tags: [CCAvenue]
+      summary: Check CCAvenue Payment Status
+      operationId: ccavenue_check_payment_status
+      security: []
+      parameters:
+        - name: integration_request_name
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "INT-00123"
+      responses:
+        "200":
+          description: Payment status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    $ref: "#/components/schemas/PaymentStatusResponse"
+
+  /api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.verify_transaction:
+    post:
+      tags: [CCAvenue]
+      summary: CCAvenue Browser Redirect (verify_transaction)
+      description: |
+        Primary browser redirect from CCAvenue after payment. Decrypts `encResp`,
+        updates Integration Request, creates Payment Entry, restores user session.
+
+        Configure as `redirect_url` / surl in CCAvenue dashboard.
+        Use `?merchant={name}` to select the correct encryption key.
+      operationId: ccavenue_verify_transaction
+      security: []
+      parameters:
+        - name: merchant
+          in: query
+          required: false
+          schema:
+            type: string
+          description: CCAvenue Merchant record name
+          example: "Hostel-Koramangala"
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [encResp]
+              properties:
+                encResp:
+                  type: string
+                  description: AES-encrypted response from CCAvenue
+      responses:
+        "302":
+          description: Redirect to redirect_to URL after processing
+
+  /api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.order_status_echo:
+    post:
+      tags: [CCAvenue]
+      summary: CCAvenue S2S Backup Webhook (order_status_echo)
+      description: |
+        Server-to-server backup notification from CCAvenue. Duplicate-safe —
+        skips processing if Integration Request is already Completed or Authorized.
+
+        Configure as `notify_url` in CCAvenue dashboard.
+      operationId: ccavenue_order_status_echo
+      security: []
+      parameters:
+        - name: merchant
+          in: query
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [encResp]
+              properties:
+                encResp:
+                  type: string
+      responses:
+        "200":
+          description: Webhook processed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      status:
+                        type: string
+                      tracking_id:
+                        type: string
+                      order_status:
+                        type: string
+                      integration_request:
+                        type: string
+
+  /api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.reconciliation_status:
+    post:
+      tags: [CCAvenue]
+      summary: CCAvenue Reconciliation Webhook
+      description: Handles delayed payment confirmations (UPI, wallet reconciliation).
+      operationId: ccavenue_reconciliation_status
+      security: []
+      parameters:
+        - name: merchant
+          in: query
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [encResp]
+              properties:
+                encResp:
+                  type: string
+      responses:
+        "200":
+          description: Reconciliation processed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      previous_status:
+                        type: string
+                      new_status:
+                        type: string
+                      order_status:
+                        type: string
+                      tracking_id:
+                        type: string
+
+  /api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.refund_status:
+    post:
+      tags: [CCAvenue]
+      summary: CCAvenue Refund Webhook
+      description: |
+        Handles CCAvenue refund status callbacks.
+        Calls `on_refund_status_update` on the reference document.
+      operationId: ccavenue_refund_status
+      security: []
+      parameters:
+        - name: merchant
+          in: query
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [encResp]
+              properties:
+                encResp:
+                  type: string
+      responses:
+        "200":
+          description: Refund status processed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      order_id:
+                        type: string
+                      refund_id:
+                        type: string
+                      refund_status:
+                        type: string
+                      refund_amount:
+                        type: number
+
+  /api/method/payments.payment_gateways.doctype.ccavenue_settings.ccavenue_settings.restore_user_session:
+    get:
+      tags: [CCAvenue]
+      summary: Restore User Session
+      description: Restores the Frappe user session after a Guest CCAvenue callback.
+      operationId: ccavenue_restore_user_session
+      security: []
+      responses:
+        "200":
+          description: Session restoration result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      user:
+                        type: string
+
+# -----------------------------------------------------------------------
+# PATHS – EASEBUZZ
+# -----------------------------------------------------------------------
+
+  /api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.initiate_payment:
+    post:
+      tags: [Easebuzz]
+      summary: Initiate Easebuzz Payment
+      description: |
+        Creates an Easebuzz payment link via the Easebuzz initiateLink API.
+        Returns `payment_url` for the frontend to redirect the user to.
+
+        Payment Charges are applied server-side.
+      operationId: easebuzz_initiate_payment
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InitiatePaymentRequest"
+      responses:
+        "200":
+          description: Payment link created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    $ref: "#/components/schemas/EasebuzzInitiateResponse"
+
+  /api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.check_payment_status:
+    get:
+      tags: [Easebuzz]
+      summary: Check Easebuzz Payment Status
+      operationId: easebuzz_check_payment_status
+      security: []
+      parameters:
+        - name: integration_request_name
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "INT-00123"
+      responses:
+        "200":
+          description: Payment status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    $ref: "#/components/schemas/PaymentStatusResponse"
+
+  /api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.verify_transaction:
+    post:
+      tags: [Easebuzz]
+      summary: Easebuzz Browser Redirect (verify_transaction)
+      description: |
+        Browser surl/furl redirect from Easebuzz. Verifies SHA-512 hash, creates
+        Payment Entry, restores session.
+
+        Add `?return_json=1` to receive a JSON response instead of an HTTP redirect
+        (useful for mobile apps and React Native).
+      operationId: easebuzz_verify_transaction
+      security: []
+      parameters:
+        - name: merchant
+          in: query
+          required: false
+          schema:
+            type: string
+          example: "Hostel-Koramangala"
+        - name: return_json
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [0, 1]
+          description: "1 = return JSON instead of redirect"
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/EasebuzzWebhookPayload"
+      responses:
+        "302":
+          description: Redirect to redirect_to URL (when return_json=0)
+        "200":
+          description: JSON result (when return_json=1)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    $ref: "#/components/schemas/EasebuzzWebhookResponse"
+
+  /api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.webhook_callback:
+    post:
+      tags: [Easebuzz]
+      summary: Easebuzz S2S JSON Webhook
+      description: |
+        Server-to-server JSON webhook from Easebuzz. Duplicate-safe.
+        Configure as webhook URL in Easebuzz Dashboard → API Details.
+      operationId: easebuzz_webhook_callback
+      security: []
+      parameters:
+        - name: merchant
+          in: query
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EasebuzzWebhookPayload"
+      responses:
+        "200":
+          description: Webhook processed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    $ref: "#/components/schemas/EasebuzzWebhookResponse"
+
+  /api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.refund_status:
+    post:
+      tags: [Easebuzz]
+      summary: Easebuzz Refund Webhook
+      description: Handles Easebuzz refund status webhooks. Calls `on_refund_status_update` on the reference document.
+      operationId: easebuzz_refund_status
+      security: []
+      parameters:
+        - name: merchant
+          in: query
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                txnid:
+                  type: string
+                refund_id:
+                  type: string
+                refund_status:
+                  type: string
+                refund_amount:
+                  type: string
+                udf5:
+                  type: string
+                  description: merchant_name
+      responses:
+        "200":
+          description: Refund processed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      txnid:
+                        type: string
+                      refund_id:
+                        type: string
+                      refund_status:
+                        type: string
+                      refund_amount:
+                        type: string
+
+# -----------------------------------------------------------------------
+# PATHS – CASHFREE
+# -----------------------------------------------------------------------
+
+  /api/method/payments.payment_gateways.doctype.cashfree_settings.cashfree_settings.test_cashfree_connection:
+    post:
+      tags: [Cashfree]
+      summary: Test Cashfree Connection
+      description: Validates Cashfree credentials for a given Settings record. Requires System Manager auth.
+      operationId: cashfree_test_connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [settings_name]
+              properties:
+                settings_name:
+                  type: string
+                  description: Cashfree Settings `gateway_name`
+                  example: "Hostel-Koramangala"
+      responses:
+        "200":
+          description: Connection test result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      message:
+                        type: string
+                        example: "Connection successful"
+
+  /api/method/payments.payment_gateways.doctype.cashfree_settings.cashfree_settings.create_test_payment_link:
+    post:
+      tags: [Cashfree]
+      summary: Create Cashfree Test Payment Link
+      description: Creates a test Cashfree payment link. Requires System Manager auth.
+      operationId: cashfree_create_test_payment_link
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [settings_name, amount, customer_email, customer_name, customer_phone, description]
+              properties:
+                settings_name:
+                  type: string
+                  example: "Hostel-Koramangala"
+                amount:
+                  type: number
+                  example: 500
+                customer_email:
+                  type: string
+                  format: email
+                customer_name:
+                  type: string
+                customer_phone:
+                  type: string
+                  example: "9876543210"
+                description:
+                  type: string
+      responses:
+        "200":
+          description: Payment link created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: object
+                    properties:
+                      cf_link_id:
+                        type: string
+                      link_id:
+                        type: string
+                      link_url:
+                        type: string
+                      link_status:
+                        type: string
+                        enum: [ACTIVE, PAID, EXPIRED]
+
+  /api/method/payments.payment_gateways.doctype.cashfree_settings.cashfree_settings.cashfree_webhook:
+    post:
+      tags: [Cashfree]
+      summary: Cashfree Webhook
+      description: |
+        Receives Cashfree payment event webhooks.
+
+        **Signature verification:** The handler verifies `X-Webhook-Signature`
+        (HMAC-SHA256 of `timestamp + payload` with `client_secret`) and `X-Webhook-Timestamp`.
+
+        The correct Cashfree Settings record is resolved by:
+        `order_id → Integration Request → company → get_cashfree_settings_by_company(company)`
+      operationId: cashfree_webhook
+      security: []
+      parameters:
+        - name: x-webhook-signature
+          in: header
+          required: true
+          schema:
+            type: string
+          description: HMAC-SHA256(timestamp + "." + raw_body, client_secret)
+        - name: x-webhook-timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Unix timestamp of the request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CashfreeWebhookPayload"
+      responses:
+        "200":
+          description: Webhook processed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        enum: [success, error]
+                      message:
+                        type: string
+
+  /api/method/payments.templates.pages.cashfree_checkout.make_payment:
+    post:
+      tags: [Cashfree]
+      summary: Cashfree Make Payment (checkout page)
+      description: |
+        Called by the Cashfree checkout page JS after the Cashfree SDK reports payment.
+        Fetches order status from Cashfree API, authorizes payment, returns redirect URL.
+      operationId: cashfree_make_payment
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order_id, payment_session_id, reference_doctype, reference_docname, token]
+              properties:
+                order_id:
+                  type: string
+                payment_session_id:
+                  type: string
+                reference_doctype:
+                  type: string
+                reference_docname:
+                  type: string
+                token:
+                  type: string
+                  description: Integration Request name
+      responses:
+        "200":
+          description: Payment result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: object
+                    properties:
+                      redirect_to:
+                        type: string
+                      status:
+                        type: string
+                        enum: [Success, Failed]
+
+# -----------------------------------------------------------------------
+# PATHS – COMMON
+# -----------------------------------------------------------------------
+
   /api/method/payments.utils.ivyliving_methods.handle_cart_submit:
     post:
       tags: [Common]
       summary: Handle Cart Submit (multi-gateway)
       description: |
         Submits a shopping cart for payment. Resolves the correct gateway
-        (CCAvenue / Easebuzz / Razorpay) from `Payment Gateway Config` for
-        the customer's company/hostel. Returns a `payment_url` and `gateway`.
+        (CCAvenue / Easebuzz / Razorpay / Cashfree) from `Payment Gateway Config`
+        for the customer's company/hostel. Returns a `payment_url` and `gateway`.
       operationId: handle_cart_submit
       security: []
       requestBody:
@@ -401,7 +1200,7 @@ paths:
                     type: string
                   gateway:
                     type: string
-                    enum: [CCAvenue, Easebuzz, Razorpay]
+                    enum: [CCAvenue, Easebuzz, Razorpay, Cashfree]
 
   /api/method/payments.overrides.sales_invoice.get_payment_details:
     get:
@@ -409,7 +1208,6 @@ paths:
       summary: Get Payment Details for Sales Invoice
       description: Returns payment initiation data for a Sales Invoice. Used to pre-fill initiate_payment requests.
       operationId: get_payment_details
-      requestBody: null
       parameters:
         - name: sales_invoice_name
           in: query
@@ -431,62 +1229,4 @@ paths:
                       success:
                         type: boolean
                       data:
-                        $ref: "#/components/schemas/RazorpayInitiateRequest"
-
-  /api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.initiate_payment:
-    post:
-      tags: [Easebuzz]
-      summary: Initiate Easebuzz Payment
-      description: Creates an Easebuzz payment link. Returns `payment_url` for browser redirect.
-      operationId: easebuzz_initiate_payment
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RazorpayInitiateRequest"
-      responses:
-        "200":
-          description: Payment initiated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: object
-                    properties:
-                      success:
-                        type: boolean
-                      payment_token:
-                        type: string
-                      payment_url:
-                        type: string
-                      txnid:
-                        type: string
-                      merchant_name:
-                        type: string
-
-  /api/method/payments.payment_gateways.doctype.easebuzz_settings.easebuzz_settings.check_payment_status:
-    get:
-      tags: [Easebuzz]
-      summary: Check Easebuzz Payment Status
-      operationId: easebuzz_check_payment_status
-      security: []
-      parameters:
-        - name: integration_request_name
-          in: query
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Payment status
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    $ref: "#/components/schemas/PaymentStatusResponse"
+                        $ref: "#/components/schemas/InitiatePaymentRequest"
