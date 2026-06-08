@@ -131,6 +131,11 @@ doc_events = {
 # ---------------
 
 scheduler_events = {
+	# capture_payment handles legacy "Authorized" Integration Requests created
+	# before auto-capture (payment_capture=1) was enabled on new Razorpay orders.
+	# New orders are auto-captured at the Razorpay order level and reach "Completed"
+	# immediately.  Once all pre-migration "Authorized" records are resolved
+	# (see razorpay_merchant_migration patch), this scheduler entry can be removed.
 	"all": [
 		"payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.capture_payment",
 	],
