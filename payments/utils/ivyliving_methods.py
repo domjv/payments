@@ -18,8 +18,72 @@ def handle_payment_authorization_payment_request(doc, method, status):
         if not source_exchange_rate:
             frappe.throw(f"Exchange Rate is missing for {doc.currency} to {default_currency}.")
 
-    debtors_account = f"Debtors - {company_abbr}"
-    bank_account = f"CCAvenue - {company_abbr}"
+    # Resolve gateway from integration request
+    ir_row = frappe.db.get_value(
+        "Integration Request",
+        {"reference_doctype": "Payment Request", "reference_docname": doc.name},
+        ["data", "integration_request_service"],
+        as_dict=True,
+    )
+
+    ir_data = {}
+    service = ""
+    reference_no = "INV-0001"
+
+    if ir_row:
+        ir_data = json.loads(ir_row.get("data") or "{}")
+        service = ir_row.get("integration_request_service") or ""
+
+    if service == "Razorpay":
+        notes = ir_data.get("notes") or {}
+        if isinstance(notes, str):
+            try:
+                notes = json.loads(notes)
+            except Exception:
+                notes = {}
+        merchant_name = ir_data.get("custom_merchant_name") or (
+            notes.get("merchant_name") if isinstance(notes, dict) else None
+        )
+        merchant_doc = None
+        if merchant_name:
+            try:
+                merchant_doc = frappe.get_doc("Razorpay Merchant", merchant_name)
+            except Exception:
+                pass
+        if not merchant_doc:
+            try:
+                rzp_settings = frappe.get_doc("Razorpay Settings")
+                merchant_doc = rzp_settings.get_merchant_for_company(company=company)
+            except Exception:
+                pass
+        debtors_account = f"{merchant_doc.debtors_account} - {company_abbr}" if (merchant_doc and merchant_doc.get("debtors_account")) else f"Debtors - {company_abbr}"
+        bank_account = f"{merchant_doc.bank_account} - {company_abbr}" if (merchant_doc and merchant_doc.get("bank_account")) else f"Razorpay - {company_abbr}"
+        reference_no = ir_data.get("razorpay_payment_id") or ir_data.get("razorpay_order_id") or "INV-0001"
+        mode_of_payment = "Razorpay"
+    elif service == "Easebuzz":
+        merchant_name = ir_data.get("custom_merchant_name")
+        merchant_doc = None
+        if merchant_name:
+            try:
+                merchant_doc = frappe.get_doc("Easebuzz Merchant", merchant_name)
+            except Exception:
+                pass
+        if not merchant_doc:
+            try:
+                eb_settings = frappe.get_doc("Easebuzz Settings")
+                merchant_doc = eb_settings.get_merchant_for_company(company=company)
+            except Exception:
+                pass
+        debtors_account = f"{merchant_doc.debtors_account} - {company_abbr}" if (merchant_doc and merchant_doc.get("debtors_account")) else f"Debtors - {company_abbr}"
+        bank_account = f"{merchant_doc.bank_account} - {company_abbr}" if (merchant_doc and merchant_doc.get("bank_account")) else f"Easebuzz - {company_abbr}"
+        reference_no = ir_data.get("easepayid") or ir_data.get("txnid") or "INV-0001"
+        mode_of_payment = "Easebuzz"
+    else:
+        # CCAvenue (default)
+        debtors_account = f"Debtors - {company_abbr}"
+        bank_account = f"CCAvenue - {company_abbr}"
+        reference_no = ir_data.get("tracking_id") or "INV-0001"
+        mode_of_payment = "CCAvenue"
 
     integration_request = frappe.db.get_value(
         "Integration Request",
@@ -27,16 +91,14 @@ def handle_payment_authorization_payment_request(doc, method, status):
         "data"
     )
 
-    reference_no = "INV-0001"
-
-    if integration_request:
-        reference_no = json.loads(integration_request).get("tracking_id")
+    if integration_request and service not in ("Razorpay", "Easebuzz"):
+        reference_no = json.loads(integration_request).get("tracking_id") or reference_no
 
     try:
         payment_entry = frappe.get_doc({
             "doctype": "Payment Entry",
             "payment_type": "Receive",
-            "mode_of_payment": "CCAvenue",
+            "mode_of_payment": mode_of_payment,
             "party_type": doc.party_type,
             "party": doc.party,
             "party_name": doc.party,
@@ -72,11 +134,20 @@ def handle_payment_authorization_payment_request(doc, method, status):
 
 def handle_payment_authorization_customer(doc, method, status):
     customer = frappe.get_doc(doc)
-    integration_request = frappe.db.get_value(
+    ir_row = frappe.db.get_value(
         "Integration Request",
         {"reference_doctype": "Customer", "reference_docname": doc.name},
-        "data"
+        ["data", "integration_request_service"],
+        as_dict=True,
     )
+    if not ir_row:
+        frappe.log_error(
+            f"Integration Request not found for Customer {doc.name}",
+            "Customer Payment Authorization Error",
+        )
+        return
+    integration_request = ir_row.get("data")
+    service = ir_row.get("integration_request_service") or ""
     request_data = json.loads(integration_request)
 
     remarks = request_data.get("description","")
@@ -86,23 +157,62 @@ def handle_payment_authorization_customer(doc, method, status):
     item_prices = [item.split("=")[1].strip() for item in item_codes_and_prices]
     merchant_name = request_data.get("custom_merchant_name")
     merchant_dict = {}
-    
-    # Use the new merchant selection logic
-    if merchant_name:
-        try:
-            merchant_dict = frappe.get_doc("CCAvenue Merchant", merchant_name).as_dict()
-        except:
-            frappe.log_error(f"Merchant {merchant_name} not found, using default")
-            merchant_dict = {}
-    
-    # If no explicit merchant, try to get from company or default
-    if not merchant_dict:
-        company = doc.custom_hostel_name
-        settings = frappe.get_doc("CCAvenue Settings")
-        merchant_doc = settings.get_merchant_for_company(company=company)
-        if merchant_doc:
-            merchant_dict = merchant_doc.as_dict()
-            merchant_name = merchant_doc.name
+
+    if service == "Razorpay":
+        notes = request_data.get("notes") or {}
+        if isinstance(notes, str):
+            try:
+                notes = json.loads(notes)
+            except Exception:
+                notes = {}
+        merchant_name = merchant_name or (notes.get("merchant_name") if isinstance(notes, dict) else None)
+        if merchant_name:
+            try:
+                merchant_dict = frappe.get_doc("Razorpay Merchant", merchant_name).as_dict()
+            except Exception:
+                frappe.log_error(f"Razorpay Merchant {merchant_name} not found, using default")
+        if not merchant_dict:
+            company = doc.custom_hostel_name
+            try:
+                rzp_settings = frappe.get_doc("Razorpay Settings")
+                merchant_doc = rzp_settings.get_merchant_for_company(company=company)
+                if merchant_doc:
+                    merchant_dict = merchant_doc.as_dict()
+                    merchant_name = merchant_doc.name
+            except Exception:
+                pass
+    elif service == "Easebuzz":
+        if merchant_name:
+            try:
+                merchant_dict = frappe.get_doc("Easebuzz Merchant", merchant_name).as_dict()
+            except Exception:
+                frappe.log_error(f"Easebuzz Merchant {merchant_name} not found, using default")
+        if not merchant_dict:
+            company = doc.custom_hostel_name
+            try:
+                eb_settings = frappe.get_doc("Easebuzz Settings")
+                merchant_doc = eb_settings.get_merchant_for_company(company=company)
+                if merchant_doc:
+                    merchant_dict = merchant_doc.as_dict()
+                    merchant_name = merchant_doc.name
+            except Exception:
+                pass
+    else:
+        # CCAvenue (default)
+        if merchant_name:
+            try:
+                merchant_dict = frappe.get_doc("CCAvenue Merchant", merchant_name).as_dict()
+            except Exception:
+                frappe.log_error(f"Merchant {merchant_name} not found, using default")
+                merchant_dict = {}
+
+        if not merchant_dict:
+            company = doc.custom_hostel_name
+            settings = frappe.get_doc("CCAvenue Settings")
+            merchant_doc = settings.get_merchant_for_company(company=company)
+            if merchant_doc:
+                merchant_dict = merchant_doc.as_dict()
+                merchant_name = merchant_doc.name
     
     total_amount = 0
     for item_price in item_prices:
@@ -110,7 +220,18 @@ def handle_payment_authorization_customer(doc, method, status):
 
     company = doc.custom_hostel_name
     debtors_account_name = "Debtors"
-    bank_account_name = "CCAvenue"
+    if service == "Razorpay":
+        bank_account_name = "Razorpay"
+        mode_of_payment = "Razorpay"
+        reference_no = request_data.get("razorpay_payment_id") or request_data.get("razorpay_order_id")
+    elif service == "Easebuzz":
+        bank_account_name = "Easebuzz"
+        mode_of_payment = "Easebuzz"
+        reference_no = request_data.get("easepayid") or request_data.get("txnid")
+    else:
+        bank_account_name = "CCAvenue"
+        mode_of_payment = "CCAvenue"
+        reference_no = request_data.get("tracking_id")
     if merchant_name and merchant_dict:
         if merchant_dict.get("company") is not None and merchant_dict.get("company") != "":
             company = merchant_dict.get("company")
@@ -131,7 +252,7 @@ def handle_payment_authorization_customer(doc, method, status):
         payment_entry = frappe.get_doc({
             "doctype": "Payment Entry",
             "payment_type": "Receive",
-            "mode_of_payment": "CCAvenue",
+            "mode_of_payment": mode_of_payment,
             "party_type": "Customer",
             "party": doc.name,  # Customer name
             "party_name": doc.name,
@@ -142,7 +263,7 @@ def handle_payment_authorization_customer(doc, method, status):
             "paid_from": debtors_account,
             "paid_to": bank_account,
             "paid_to_account_currency": default_currency,
-            "reference_no": request_data.get("tracking_id"),
+            "reference_no": reference_no,
             "reference_date": frappe.utils.nowdate(),
             "source_exchange_rate": source_exchange_rate,
             "remarks": remarks
