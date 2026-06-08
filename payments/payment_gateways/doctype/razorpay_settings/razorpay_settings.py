@@ -2,67 +2,58 @@
 # License: MIT. See LICENSE
 
 """
-# Integrating RazorPay
+# Integrating Razorpay (Multi-Merchant)
 
-### Validate Currency
+### 1. Validate Currency
 
-Example:
+    from payments.utils import get_payment_gateway_controller
 
-	from payments.utils import get_payment_gateway_controller
+    controller = get_payment_gateway_controller("Razorpay")
+    controller.validate_transaction_currency(currency)
 
-	controller = get_payment_gateway_controller("Razorpay")
-	controller().validate_transaction_currency(currency)
+### 2. Standard ERPNext redirect checkout
 
-### 2. Redirect for payment
+    payment_details = {
+        "amount": 600,
+        "title": "Payment for bill : 111",
+        "description": "payment via cart",
+        "reference_doctype": "Payment Request",
+        "reference_docname": "PR0001",
+        "payer_email": "customer@example.com",
+        "payer_name": "Customer Name",
+        "currency": "INR",
+        "payment_gateway": "Razorpay",
+        "company": "Hostel A",            # optional – drives merchant selection
+        "custom_merchant_name": "HsA-RP",  # optional – explicit merchant override
+    }
 
-Example:
+    url = controller.get_payment_url(**payment_details)
 
-	payment_details = {
-		"amount": 600,
-		"title": "Payment for bill : 111",
-		"description": "payment via cart",
-		"reference_doctype": "Payment Request",
-		"reference_docname": "PR0001",
-		"payer_email": "NuranVerkleij@example.com",
-		"payer_name": "Nuran Verkleij",
-		"order_id": "111",
-		"currency": "INR",
-		"payment_gateway": "Razorpay",
-		"subscription_details": {
-			"plan_id": "plan_12313", # if Required
-			"start_date": "2018-08-30",
-			"billing_period": "Month" #(Day, Week, Month, Year),
-			"billing_frequency": 1,
-			"customer_notify": 1,
-			"upfront_amount": 1000
-		}
-	}
+### 3. External-frontend API flow
 
-	# Redirect the user to this url
-	url = controller().get_payment_url(**payment_details)
+    POST /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.initiate_payment
+    POST /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.verify_payment
+    GET  /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.check_payment_status
 
+### 4. On Completion of Payment
 
-### 3. On Completion of Payment
-
-Write a method for `on_payment_authorized` in the reference doctype
-
-Example:
-
-	def on_payment_authorized(payment_status):
-		# this method will be called when payment is complete
-
+    def on_payment_authorized(payment_status):
+        # called with "Completed" on success
+        pass
 
 ##### Notes:
 
-payment_status - payment gateway will put payment status on callback.
-For razorpay payment status is Authorized
-
+- Per-hostel/company credentials live in **Razorpay Merchant** records.
+- Global fallback credentials are stored in **Razorpay Settings** (Single).
+- The merchant is resolved by: explicit merchant_name → company match → is_default.
+- Subscriptions are still fully supported (setup_subscription, addons, cancel_subscription).
 """
 
 import hashlib
 import hmac
 import json
-from urllib.parse import urlencode
+import math
+from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
 
 import frappe
 import razorpay
@@ -80,150 +71,132 @@ from payments.utils import create_payment_gateway
 
 class RazorpaySettings(Document):
 	supported_currencies = (
-		"AED",
-		"ALL",
-		"AMD",
-		"ARS",
-		"AUD",
-		"AWG",
-		"AZN",
-		"BAM",
-		"BBD",
-		"BDT",
-		"BGN",
-		"BHD",
-		"BIF",
-		"BMD",
-		"BND",
-		"BOB",
-		"BRL",
-		"BSD",
-		"BTN",
-		"BWP",
-		"BZD",
-		"CAD",
-		"CHF",
-		"CLP",
-		"CNY",
-		"COP",
-		"CRC",
-		"CUP",
-		"CVE",
-		"CZK",
-		"DJF",
-		"DKK",
-		"DOP",
-		"DZD",
-		"EGP",
-		"ETB",
-		"EUR",
-		"FJD",
-		"GBP",
-		"GHS",
-		"GIP",
-		"GMD",
-		"GNF",
-		"GTQ",
-		"GYD",
-		"HKD",
-		"HNL",
-		"HRK",
-		"HTG",
-		"HUF",
-		"IDR",
-		"ILS",
-		"INR",
-		"IQD",
-		"ISK",
-		"JMD",
-		"JOD",
-		"JPY",
-		"KES",
-		"KGS",
-		"KHR",
-		"KMF",
-		"KRW",
-		"KWD",
-		"KYD",
-		"KZT",
-		"LAK",
-		"LKR",
-		"LRD",
-		"LSL",
-		"MAD",
-		"MDL",
-		"MGA",
-		"MKD",
-		"MMK",
-		"MNT",
-		"MOP",
-		"MUR",
-		"MVR",
-		"MWK",
-		"MXN",
-		"MYR",
-		"MZN",
-		"NAD",
-		"NGN",
-		"NIO",
-		"NOK",
-		"NPR",
-		"NZD",
-		"OMR",
-		"PEN",
-		"PGK",
-		"PHP",
-		"PKR",
-		"PLN",
-		"PYG",
-		"QAR",
-		"RON",
-		"RSD",
-		"RUB",
-		"RWF",
-		"SAR",
-		"SCR",
-		"SEK",
-		"SGD",
-		"SLL",
-		"SOS",
-		"SSP",
-		"SVC",
-		"SZL",
-		"THB",
-		"TND",
-		"TRY",
-		"TTD",
-		"TWD",
-		"TZS",
-		"UAH",
-		"UGX",
-		"USD",
-		"UYU",
-		"UZS",
-		"VND",
-		"VUV",
-		"XAF",
-		"XCD",
-		"XOF",
-		"XPF",
-		"YER",
-		"ZAR",
-		"ZMW",
+		"AED", "ALL", "AMD", "ARS", "AUD", "AWG", "AZN", "BAM", "BBD", "BDT",
+		"BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BRL", "BSD", "BTN", "BWP",
+		"BZD", "CAD", "CHF", "CLP", "CNY", "COP", "CRC", "CUP", "CVE", "CZK",
+		"DJF", "DKK", "DOP", "DZD", "EGP", "ETB", "EUR", "FJD", "GBP", "GHS",
+		"GIP", "GMD", "GNF", "GTQ", "GYD", "HKD", "HNL", "HRK", "HTG", "HUF",
+		"IDR", "ILS", "INR", "IQD", "ISK", "JMD", "JOD", "JPY", "KES", "KGS",
+		"KHR", "KMF", "KRW", "KWD", "KYD", "KZT", "LAK", "LKR", "LRD", "LSL",
+		"MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", "MUR", "MVR", "MWK",
+		"MXN", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK", "NPR", "NZD", "OMR",
+		"PEN", "PGK", "PHP", "PKR", "PLN", "PYG", "QAR", "RON", "RSD", "RUB",
+		"RWF", "SAR", "SCR", "SEK", "SGD", "SLL", "SOS", "SSP", "SVC", "SZL",
+		"THB", "TND", "TRY", "TTD", "TWD", "TZS", "UAH", "UGX", "USD", "UYU",
+		"UZS", "VND", "VUV", "XAF", "XCD", "XOF", "XPF", "YER", "ZAR", "ZMW",
 	)
 
-	def init_client(self):
-		if self.api_key:
-			secret = self.get_password(fieldname="api_secret", raise_exception=False)
-			self.client = razorpay.Client(auth=(self.api_key, secret))
+	# ------------------------------------------------------------------
+	# Merchant resolution
+	# ------------------------------------------------------------------
+
+	def get_merchant_for_company(self, company=None, merchant_name=None):
+		"""
+		Resolve the Razorpay Merchant to use for a payment.
+
+		Priority:
+		  1. Explicit ``merchant_name`` argument
+		  2. Company-specific merchant (``company`` field on merchant)
+		  3. Default merchant (``is_default = 1``)
+		  4. Raises an error – no implicit fall-through to global Settings creds
+		     (use ``get_settings()`` if you want the global-fallback path).
+
+		Returns:
+		    frappe.Document: RazorpayMerchant document
+		"""
+		if merchant_name:
+			try:
+				return frappe.get_doc("Razorpay Merchant", merchant_name)
+			except frappe.DoesNotExistError:
+				frappe.log_error(
+					f"Razorpay Merchant '{merchant_name}' not found, falling back to company/default",
+					"Razorpay Merchant Resolution",
+				)
+
+		if company:
+			name = frappe.db.get_value("Razorpay Merchant", {"company": company}, "name")
+			if name:
+				return frappe.get_doc("Razorpay Merchant", name)
+
+		default_name = frappe.db.get_value("Razorpay Merchant", {"is_default": 1}, "name")
+		if default_name:
+			return frappe.get_doc("Razorpay Merchant", default_name)
+
+		frappe.throw(
+			_(
+				"No Razorpay Merchant configuration found. "
+				"Please create a Razorpay Merchant record and mark one as the default."
+			)
+		)
+
+	def get_credentials(self, data=None, company=None, merchant_name=None):
+		"""
+		Return a ``frappe._dict`` with ``api_key``, ``api_secret``, ``environment``
+		and ``redirect_to`` for the resolved merchant.
+
+		Falls back to global Razorpay Settings if no merchant records exist.
+		Sandbox override via site config is still honoured.
+		"""
+		data = data or {}
+
+		# Sandbox override via site config (legacy path – keeps subscriptions working)
+		if cint(data.get("notes", {}).get("use_sandbox")) or data.get("use_sandbox"):
+			return frappe._dict(
+				{
+					"api_key": frappe.conf.sandbox_api_key,
+					"api_secret": frappe.conf.sandbox_api_secret,
+					"environment": "Test",
+					"redirect_to": self.redirect_to or "",
+				}
+			)
+
+		# Prefer merchant record
+		merchant_doc = None
+		try:
+			merchant_doc = self.get_merchant_for_company(
+				company=company or data.get("company"),
+				merchant_name=merchant_name or data.get("custom_merchant_name"),
+			)
+		except frappe.ValidationError:
+			pass  # No merchants configured – fall back to global Settings
+
+		if merchant_doc:
+			return frappe._dict(
+				{
+					"api_key": merchant_doc.api_key,
+					"api_secret": merchant_doc.get_password(fieldname="api_secret", raise_exception=False),
+					"environment": merchant_doc.environment or "Test",
+					"redirect_to": merchant_doc.redirect_to or self.redirect_to or "",
+					"merchant_name": merchant_doc.name,
+				}
+			)
+
+		# Global fallback
+		return frappe._dict(
+			{
+				"api_key": self.api_key,
+				"api_secret": self.get_password(fieldname="api_secret", raise_exception=False),
+				"environment": self.environment or "Test",
+				"redirect_to": self.redirect_to or "",
+				"merchant_name": None,
+			}
+		)
+
+	def get_razorpay_client(self, creds):
+		"""Return a ``razorpay.Client`` initialised with the given credentials dict."""
+		return razorpay.Client(auth=(creds.api_key, creds.api_secret))
+
+	# ------------------------------------------------------------------
+	# Lifecycle
+	# ------------------------------------------------------------------
 
 	def validate(self):
 		create_payment_gateway("Razorpay")
 		call_hook_method("payment_gateway_enabled", gateway="Razorpay")
 		if not self.flags.ignore_mandatory:
-			self.validate_razorpay_credentails()
+			self.validate_razorpay_credentials()
 
-	def validate_razorpay_credentails(self):
+	def validate_razorpay_credentials(self):
 		if self.api_key and self.api_secret:
 			try:
 				make_get_request(
@@ -234,95 +207,20 @@ class RazorpaySettings(Document):
 					),
 				)
 			except Exception:
-				frappe.throw(_("Seems API Key or API Secret is wrong !!!"))
+				frappe.throw(_("Razorpay: API Key or API Secret appears to be incorrect."))
 
 	def validate_transaction_currency(self, currency):
 		if currency not in self.supported_currencies:
 			frappe.throw(
 				_(
-					"Please select another payment method. Razorpay does not support transactions in currency '{0}'"
+					"Please select another payment method. "
+					"Razorpay does not support transactions in currency '{0}'"
 				).format(currency)
 			)
 
-	def setup_addon(self, settings, **kwargs):
-		"""
-		Addon template:
-		{
-		        "item": {
-		                "name": row.upgrade_type,
-		                "amount": row.amount,
-		                "currency": currency,
-		                "description": "add-on description"
-		        },
-		        "quantity": 1 (The total amount is calculated as item.amount * quantity)
-		}
-		"""
-		url = "https://api.razorpay.com/v1/subscriptions/{}/addons".format(kwargs.get("subscription_id"))
-
-		try:
-			if not frappe.conf.converted_rupee_to_paisa:
-				convert_rupee_to_paisa(**kwargs)
-
-			for addon in kwargs.get("addons"):
-				resp = make_post_request(
-					url,
-					auth=(settings.api_key, settings.api_secret),
-					data=json.dumps(addon),
-					headers={"content-type": "application/json"},
-				)
-				if not resp.get("id"):
-					frappe.log_error(message=str(resp), title="Razorpay Failed while creating subscription")
-		except Exception:
-			frappe.log_error()
-			# failed
-			pass
-
-	def setup_subscription(self, settings, **kwargs):
-		start_date = (
-			get_timestamp(kwargs.get("subscription_details").get("start_date"))
-			if kwargs.get("subscription_details").get("start_date")
-			else None
-		)
-
-		subscription_details = {
-			"plan_id": kwargs.get("subscription_details").get("plan_id"),
-			"total_count": kwargs.get("subscription_details").get("billing_frequency"),
-			"customer_notify": kwargs.get("subscription_details").get("customer_notify"),
-		}
-
-		if start_date:
-			subscription_details["start_at"] = cint(start_date)
-
-		if kwargs.get("addons"):
-			convert_rupee_to_paisa(**kwargs)
-			subscription_details.update({"addons": kwargs.get("addons")})
-
-		try:
-			resp = make_post_request(
-				"https://api.razorpay.com/v1/subscriptions",
-				auth=(settings.api_key, settings.api_secret),
-				data=json.dumps(subscription_details),
-				headers={"content-type": "application/json"},
-			)
-
-			if resp.get("status") == "created":
-				kwargs["subscription_id"] = resp.get("id")
-				frappe.flags.status = "created"
-				return kwargs
-			else:
-				frappe.log_error(message=str(resp), title="Razorpay Failed while creating subscription")
-
-		except Exception:
-			frappe.log_error()
-
-	def prepare_subscription_details(self, settings, **kwargs):
-		if not kwargs.get("subscription_id"):
-			kwargs = self.setup_subscription(settings, **kwargs)
-
-		if frappe.flags.status != "created":
-			kwargs["subscription_id"] = None
-
-		return kwargs
+	# ------------------------------------------------------------------
+	# Payment URL (standard ERPNext path)
+	# ------------------------------------------------------------------
 
 	def get_payment_url(self, **kwargs):
 		if not kwargs.get("order_id"):
@@ -332,53 +230,89 @@ class RazorpaySettings(Document):
 		integration_request = create_request_log(kwargs, service_name="Razorpay")
 		return get_url(f"./razorpay_checkout?token={integration_request.name}")
 
+	# ------------------------------------------------------------------
+	# Order creation
+	# ------------------------------------------------------------------
+
 	def create_order(self, **kwargs):
-		# Creating Orders https://razorpay.com/docs/api/orders/
+		"""
+		Create a Razorpay order and return the order dict.
 
-		# convert rupees to paisa
-		kwargs["amount"] = int(kwargs["amount"] * 100)
+		Adds Payment Charge surcharges before sending the amount to Razorpay,
+		and embeds ``reference_doctype``, ``reference_docname``, ``token`` and
+		``user`` in the order ``notes`` so the callback can look up the
+		Integration Request without relying on cookie session state.
+		"""
+		company = kwargs.get("company")
+		merchant_name = kwargs.get("custom_merchant_name")
+		creds = self.get_credentials(data=kwargs, company=company, merchant_name=merchant_name)
 
-		# Create integration log
+		# Apply Payment Charge surcharges
+		base_amount = float(kwargs.get("amount", 0))
+		charge_list = frappe.get_all("Payment Charge", filters={"disabled": 0}, fields=["*"])
+		total_charges = sum(
+			math.ceil(base_amount * c.charge_percent / 100 * 100) / 100 for c in charge_list
+		)
+		final_amount = base_amount + total_charges
+
+		# Store final amount (post-charges) in kwargs so Integration Request records it
+		kwargs["amount"] = final_amount
+
+		# Create integration log before the API call
 		integration_request = create_request_log(kwargs, service_name="Razorpay")
 
-		# Setup payment options
+		# Amount in paise (Razorpay expects integers)
+		amount_paise = int(final_amount * 100)
+
 		payment_options = {
-			"amount": kwargs.get("amount"),
+			"amount": amount_paise,
 			"currency": kwargs.get("currency", "INR"),
-			"receipt": kwargs.get("receipt"),
-			"payment_capture": kwargs.get("payment_capture"),
+			"receipt": kwargs.get("receipt") or integration_request.name,
+			# auto-capture avoids the scheduler-based capture flow
+			"payment_capture": 1,
+			"notes": {
+				"reference_doctype": kwargs.get("reference_doctype", ""),
+				"reference_docname": kwargs.get("reference_docname", ""),
+				"token": integration_request.name,
+				"user": frappe.session.user or "Guest",
+				"merchant_name": creds.get("merchant_name") or "",
+				"company": company or "",
+			},
 		}
-		if self.api_key and self.api_secret:
+
+		if creds.api_key and creds.api_secret:
 			try:
 				order = make_post_request(
 					"https://api.razorpay.com/v1/orders",
-					auth=(
-						self.api_key,
-						self.get_password(fieldname="api_secret", raise_exception=False),
-					),
+					auth=(creds.api_key, creds.api_secret),
 					data=payment_options,
 				)
 				order["integration_request"] = integration_request.name
-				return order  # Order returned to be consumed by razorpay.js
+				return order
 			except Exception:
-				frappe.log(frappe.get_traceback())
-				frappe.throw(_("Could not create razorpay order"))
+				frappe.log_error(frappe.get_traceback(), "Razorpay create_order failed")
+				frappe.throw(_("Could not create Razorpay order. Please try again."))
+		else:
+			frappe.throw(_("Razorpay credentials are not configured."))
+
+	# ------------------------------------------------------------------
+	# Request / authorization
+	# ------------------------------------------------------------------
 
 	def create_request(self, data):
 		self.data = frappe._dict(data)
-
 		try:
 			self.integration_request = frappe.get_doc("Integration Request", self.data.token)
 			self.integration_request.update_status(self.data, "Queued")
 			return self.authorize_payment()
-
 		except Exception:
 			frappe.log_error(frappe.get_traceback())
 			return {
 				"redirect_to": frappe.redirect_to_message(
 					_("Server Error"),
 					_(
-						"Seems issue with server's razorpay config. Don't worry, in case of failure amount will get refunded to your account."
+						"There was an issue processing your payment. "
+						"In case of failure, any amount deducted will be refunded to your account."
 					),
 				),
 				"status": 401,
@@ -386,132 +320,308 @@ class RazorpaySettings(Document):
 
 	def authorize_payment(self):
 		"""
-		An authorization is performed when user's payment details are successfully authenticated by the bank.
-		The money is deducted from the customer's account, but will not be transferred to the merchant's account
-		until it is explicitly captured by merchant.
+		Verify the payment via Razorpay REST API and mark the Integration
+		Request as Completed (auto-capture) or Authorized (manual capture).
+		Then call on_payment_authorized on the reference document.
 		"""
 		data = json.loads(self.integration_request.data)
-		settings = self.get_settings(data)
+		company = data.get("company")
+		merchant_name = data.get("custom_merchant_name") or (
+			data.get("notes", {}).get("merchant_name") if isinstance(data.get("notes"), dict) else None
+		)
+		creds = self.get_credentials(data=data, company=company, merchant_name=merchant_name)
 
 		try:
 			resp = make_get_request(
 				f"https://api.razorpay.com/v1/payments/{self.data.razorpay_payment_id}",
-				auth=(settings.api_key, settings.api_secret),
+				auth=(creds.api_key, creds.api_secret),
 			)
 
-			if resp.get("status") == "authorized":
-				self.integration_request.update_status(data, "Authorized")
-				self.flags.status_changed_to = "Authorized"
-
-			elif resp.get("status") == "captured":
+			if resp.get("status") == "captured":
 				self.integration_request.update_status(data, "Completed")
 				self.flags.status_changed_to = "Completed"
-
-			elif data.get("subscription_id"):
-				if resp.get("status") == "refunded":
-					# if subscription start date is in future then
-					# razorpay refunds the amount after authorizing the card details
-					# thus changing status to Verified
-
-					self.integration_request.update_status(data, "Completed")
-					self.flags.status_changed_to = "Verified"
-
+			elif resp.get("status") == "authorized":
+				self.integration_request.update_status(data, "Authorized")
+				self.flags.status_changed_to = "Authorized"
+			elif data.get("subscription_id") and resp.get("status") == "refunded":
+				# Future-dated subscription: Razorpay refunds the auth amount
+				self.integration_request.update_status(data, "Completed")
+				self.flags.status_changed_to = "Verified"
 			else:
-				frappe.log_error(message=str(resp), title="Razorpay Payment not authorized")
-
+				frappe.log_error(
+					message=str(resp), title="Razorpay Payment not authorized"
+				)
 		except Exception:
-			frappe.log_error()
+			frappe.log_error(frappe.get_traceback(), "Razorpay authorize_payment error")
 
 		status = frappe.flags.integration_request.status_code
-
-		redirect_to = data.get("redirect_to") or None
+		redirect_to = creds.get("redirect_to") or data.get("redirect_to") or None
 		redirect_message = data.get("redirect_message") or None
+
 		if self.flags.status_changed_to in ("Authorized", "Verified", "Completed"):
 			if self.data.reference_doctype and self.data.reference_docname:
 				custom_redirect_to = None
 				try:
-					frappe.flags.data = data
-					custom_redirect_to = frappe.get_doc(
-						self.data.reference_doctype, self.data.reference_docname
-					).run_method("on_payment_authorized", self.flags.status_changed_to)
+					doc = frappe.get_doc(self.data.reference_doctype, self.data.reference_docname)
 
+					# Add a comment for audit trail
+					comment_text = (
+						f"<b>Razorpay Payment Processed</b><br>"
+						f"Status: {self.flags.status_changed_to}<br>"
+						f"Payment ID: {self.data.get('razorpay_payment_id', 'N/A')}<br>"
+						f"Order ID: {self.data.get('razorpay_order_id', 'N/A')}<br>"
+						f"Integration Request: {self.integration_request.name}"
+					)
+					try:
+						doc.add_comment("Info", comment_text)
+					except Exception:
+						pass
+
+					# Call Ivy Living handlers directly (same pattern as Easebuzz)
+					if self.data.reference_doctype == "Sales Invoice":
+						from payments.overrides.sales_invoice import handle_payment_authorization_sales_invoice
+						custom_redirect_to = handle_payment_authorization_sales_invoice(
+							doc, "on_payment_authorized", self.flags.status_changed_to
+						)
+					elif self.data.reference_doctype == "Payment Request":
+						from payments.utils.ivyliving_methods import handle_payment_authorization_payment_request
+						custom_redirect_to = handle_payment_authorization_payment_request(
+							doc, "on_payment_authorized", self.flags.status_changed_to
+						)
+					elif self.data.reference_doctype == "Customer":
+						from payments.utils.ivyliving_methods import handle_payment_authorization_customer
+						custom_redirect_to = handle_payment_authorization_customer(
+							doc, "on_payment_authorized", self.flags.status_changed_to
+						)
+					else:
+						if hasattr(doc, "on_payment_authorized"):
+							custom_redirect_to = doc.run_method(
+								"on_payment_authorized", self.flags.status_changed_to
+							)
 				except Exception:
-					frappe.log_error(frappe.get_traceback())
+					frappe.log_error(
+						frappe.get_traceback(), "Razorpay on_payment_authorized error"
+					)
 
-				if custom_redirect_to:
+				if custom_redirect_to and not redirect_to:
 					redirect_to = custom_redirect_to
 
-			redirect_url = (
-				f"payment-success?doctype={self.data.reference_doctype}&docname={self.data.reference_docname}"
-			)
+			# Build redirect URL
+			if redirect_to:
+				parsed = urlparse(redirect_to)
+				params = parse_qs(parsed.query)
+				params["integration_id"] = [self.integration_request.name]
+				new_query = urlencode({k: v[0] for k, v in params.items()})
+				redirect_url = urlunparse(
+					(parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment)
+				)
+			else:
+				redirect_url = (
+					f"payment-success"
+					f"?doctype={self.data.reference_doctype}"
+					f"&docname={self.data.reference_docname}"
+				)
 		else:
-			redirect_url = "payment-failed"
+			if redirect_to:
+				parsed = urlparse(redirect_to)
+				params = parse_qs(parsed.query)
+				params["integration_id"] = [self.integration_request.name]
+				new_query = urlencode({k: v[0] for k, v in params.items()})
+				redirect_url = urlunparse(
+					(parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment)
+				)
+			else:
+				redirect_url = "payment-failed"
 
-		if redirect_to:
-			redirect_url += "&" + urlencode({"redirect_to": redirect_to})
-		if redirect_message:
-			redirect_url += "&" + urlencode({"redirect_message": redirect_message})
+		if redirect_message and not redirect_to:
+			sep = "&" if "?" in redirect_url else "?"
+			redirect_url += sep + urlencode({"redirect_message": redirect_message})
 
 		return {"redirect_to": redirect_url, "status": status}
 
-	def get_settings(self, data):
-		settings = frappe._dict(
-			{
-				"api_key": self.api_key,
-				"api_secret": self.get_password(fieldname="api_secret", raise_exception=False),
-			}
-		)
-
-		if cint(data.get("notes", {}).get("use_sandbox")) or data.get("use_sandbox"):
-			settings.update(
-				{
-					"api_key": frappe.conf.sandbox_api_key,
-					"api_secret": frappe.conf.sandbox_api_secret,
-				}
-			)
-
-		return settings
-
-	def cancel_subscription(self, subscription_id):
-		settings = self.get_settings({})
-
-		try:
-			make_post_request(
-				f"https://api.razorpay.com/v1/subscriptions/{subscription_id}/cancel",
-				auth=(settings.api_key, settings.api_secret),
-			)
-		except Exception:
-			frappe.log_error(frappe.get_traceback())
+	# ------------------------------------------------------------------
+	# HMAC signature verification
+	# ------------------------------------------------------------------
 
 	def verify_signature(self, body, signature, key):
 		key = bytes(key, "utf-8")
 		body = bytes(body, "utf-8")
-
 		dig = hmac.new(key=key, msg=body, digestmod=hashlib.sha256)
-
-		generated_signature = dig.hexdigest()
-		result = hmac.compare_digest(generated_signature, signature)
-
+		generated = dig.hexdigest()
+		result = hmac.compare_digest(generated, signature)
 		if not result:
 			frappe.throw(_("Razorpay Signature Verification Failed"), exc=frappe.PermissionError)
-
 		return result
+
+	# ------------------------------------------------------------------
+	# Subscription support (unchanged from upstream)
+	# ------------------------------------------------------------------
+
+	def setup_addon(self, settings, **kwargs):
+		url = "https://api.razorpay.com/v1/subscriptions/{}/addons".format(
+			kwargs.get("subscription_id")
+		)
+		try:
+			if not frappe.conf.converted_rupee_to_paisa:
+				convert_rupee_to_paisa(**kwargs)
+			for addon in kwargs.get("addons"):
+				resp = make_post_request(
+					url,
+					auth=(settings.api_key, settings.api_secret),
+					data=json.dumps(addon),
+					headers={"content-type": "application/json"},
+				)
+				if not resp.get("id"):
+					frappe.log_error(str(resp), "Razorpay Failed while creating subscription addon")
+		except Exception:
+			frappe.log_error()
+
+	def setup_subscription(self, settings, **kwargs):
+		start_date = (
+			get_timestamp(kwargs.get("subscription_details").get("start_date"))
+			if kwargs.get("subscription_details", {}).get("start_date")
+			else None
+		)
+		subscription_details = {
+			"plan_id": kwargs.get("subscription_details", {}).get("plan_id"),
+			"total_count": kwargs.get("subscription_details", {}).get("billing_frequency"),
+			"customer_notify": kwargs.get("subscription_details", {}).get("customer_notify"),
+		}
+		if start_date:
+			subscription_details["start_at"] = cint(start_date)
+		if kwargs.get("addons"):
+			convert_rupee_to_paisa(**kwargs)
+			subscription_details.update({"addons": kwargs.get("addons")})
+		try:
+			resp = make_post_request(
+				"https://api.razorpay.com/v1/subscriptions",
+				auth=(settings.api_key, settings.api_secret),
+				data=json.dumps(subscription_details),
+				headers={"content-type": "application/json"},
+			)
+			if resp.get("status") == "created":
+				kwargs["subscription_id"] = resp.get("id")
+				frappe.flags.status = "created"
+				return kwargs
+			else:
+				frappe.log_error(str(resp), "Razorpay Failed while creating subscription")
+		except Exception:
+			frappe.log_error()
+
+	def prepare_subscription_details(self, settings, **kwargs):
+		if not kwargs.get("subscription_id"):
+			kwargs = self.setup_subscription(settings, **kwargs)
+		if frappe.flags.status != "created":
+			kwargs["subscription_id"] = None
+		return kwargs
+
+	def cancel_subscription(self, subscription_id):
+		creds = self.get_credentials()
+		try:
+			make_post_request(
+				f"https://api.razorpay.com/v1/subscriptions/{subscription_id}/cancel",
+				auth=(creds.api_key, creds.api_secret),
+			)
+		except Exception:
+			frappe.log_error(frappe.get_traceback())
+
+	# ------------------------------------------------------------------
+	# Settings helper (kept for backward compat with subscription code)
+	# ------------------------------------------------------------------
+
+	def get_settings(self, data):
+		"""Backward-compatible alias for get_credentials()."""
+		return self.get_credentials(data=data)
+
+	# ------------------------------------------------------------------
+	# Desk actions
+	# ------------------------------------------------------------------
 
 	@frappe.whitelist()
 	def clear(self):
 		self.api_key = self.api_secret = None
-		self.redirect_url = None
+		self.redirect_to = None
 		self.flags.ignore_mandatory = True
 		self.save()
 
 
+# ----------------------------------------------------------------------
+# Module-level whitelisted APIs
+# ----------------------------------------------------------------------
+
+@frappe.whitelist(allow_guest=True)
+def get_api_key():
+	"""Return the global fallback API key (used by razorpay.js modal)."""
+	controller = frappe.get_doc("Razorpay Settings")
+	return controller.api_key
+
+
+@frappe.whitelist(allow_guest=True)
+def get_order(doctype, docname):
+	"""Order returned to be consumed by razorpay.js (reference doctype must implement get_razorpay_order)."""
+	doc = frappe.get_doc(doctype, docname)
+	try:
+		return doc.get_razorpay_order()
+	except AttributeError:
+		frappe.log_error(frappe.get_traceback(), _("Controller method get_razorpay_order missing"))
+		frappe.throw(_("Could not create Razorpay order. Please contact Administrator."))
+
+
+@frappe.whitelist(allow_guest=True)
+def order_payment_success(integration_request, params):
+	"""
+	Called by razorpay.js on modal payment success.
+	``params`` contains razorpay_payment_id, razorpay_order_id, razorpay_signature.
+	"""
+	params = json.loads(params)
+	integration = frappe.get_doc("Integration Request", integration_request)
+	integration.update_status(params, integration.status)
+	integration.reload()
+
+	data = json.loads(integration.data)
+	controller = frappe.get_doc("Razorpay Settings")
+	controller.integration_request = integration
+	controller.data = frappe._dict(data)
+	controller.data.update(params)
+	controller.authorize_payment()
+
+
+@frappe.whitelist(allow_guest=True)
+def order_payment_failure(integration_request, params):
+	"""Called by razorpay.js on failure."""
+	frappe.log_error(params, "Razorpay Payment Failure")
+	params = json.loads(params)
+	integration = frappe.get_doc("Integration Request", integration_request)
+	integration.update_status(params, integration.status)
+
+
+@frappe.whitelist()
+def validate_merchant_credentials(merchant_name):
+	"""
+	Validate Razorpay API credentials stored in a Razorpay Merchant record.
+	Called from the merchant form's Test Connection button.
+	"""
+	try:
+		merchant = frappe.get_doc("Razorpay Merchant", merchant_name)
+		make_get_request(
+			url="https://api.razorpay.com/v1/payments",
+			auth=(
+				merchant.api_key,
+				merchant.get_password(fieldname="api_secret", raise_exception=False),
+			),
+		)
+		return {"success": True}
+	except Exception as e:
+		return {"success": False, "error": str(e)}
+
+
 def capture_payment(is_sandbox=False, sanbox_response=None):
 	"""
-	Verifies the purchase as complete by the merchant.
-	After capture, the amount is transferred to the merchant within T+3 days
-	where T is the day on which payment is captured.
+	Scheduled job: capture all Integration Requests in 'Authorized' status.
 
-	Note: Attempting to capture a payment whose status is not authorized will produce an error.
+	Note: New payments created with payment_capture=1 on the Razorpay order are
+	auto-captured and will be in 'Completed' status immediately. This job only
+	handles legacy 'Authorized' records from before auto-capture was enabled.
 	"""
 	controller = frappe.get_doc("Razorpay Settings")
 
@@ -525,11 +635,13 @@ def capture_payment(is_sandbox=False, sanbox_response=None):
 				resp = sanbox_response
 			else:
 				data = json.loads(doc.data)
-				settings = controller.get_settings(data)
+				creds = controller.get_credentials(data=data)
 
 				resp = make_get_request(
-					"https://api.razorpay.com/v1/payments/{}".format(data.get("razorpay_payment_id")),
-					auth=(settings.api_key, settings.api_secret),
+					"https://api.razorpay.com/v1/payments/{}".format(
+						data.get("razorpay_payment_id")
+					),
+					auth=(creds.api_key, creds.api_secret),
 					data={"amount": data.get("amount")},
 				)
 
@@ -538,7 +650,7 @@ def capture_payment(is_sandbox=False, sanbox_response=None):
 						"https://api.razorpay.com/v1/payments/{}/capture".format(
 							data.get("razorpay_payment_id")
 						),
-						auth=(settings.api_key, settings.api_secret),
+						auth=(creds.api_key, creds.api_secret),
 						data={"amount": data.get("amount")},
 					)
 
@@ -546,89 +658,19 @@ def capture_payment(is_sandbox=False, sanbox_response=None):
 				frappe.db.set_value("Integration Request", doc.name, "status", "Completed")
 
 		except Exception:
-			doc = frappe.get_doc("Integration Request", doc.name)
-			doc.status = "Failed"
-			doc.error = frappe.get_traceback()
-			doc.save()
-			frappe.log_error(doc.error, f"{doc.name} Failed")
-
-
-@frappe.whitelist(allow_guest=True)
-def get_api_key():
-	controller = frappe.get_doc("Razorpay Settings")
-	return controller.api_key
-
-
-@frappe.whitelist(allow_guest=True)
-def get_order(doctype, docname):
-	# Order returned to be consumed by razorpay.js
-	doc = frappe.get_doc(doctype, docname)
-	try:
-		# Do not use run_method here as it fails silently
-		return doc.get_razorpay_order()
-	except AttributeError:
-		frappe.log_error(frappe.get_traceback(), _("Controller method get_razorpay_order missing"))
-		frappe.throw(_("Could not create Razorpay order. Please contact Administrator"))
-
-
-@frappe.whitelist(allow_guest=True)
-def order_payment_success(integration_request, params):
-	"""Called by razorpay.js on order payment success, the params
-	contains razorpay_payment_id, razorpay_order_id, razorpay_signature
-	that is updated in the data field of integration request
-
-	Args:
-	        integration_request (string): Name for integration request doc
-	        params (string): Params to be updated for integration request.
-	"""
-	params = json.loads(params)
-	integration = frappe.get_doc("Integration Request", integration_request)
-
-	# Update integration request
-	integration.update_status(params, integration.status)
-	integration.reload()
-
-	data = json.loads(integration.data)
-	controller = frappe.get_doc("Razorpay Settings")
-
-	# Update payment and integration data for payment controller object
-	controller.integration_request = integration
-	controller.data = frappe._dict(data)
-
-	# Authorize payment
-	controller.authorize_payment()
-
-
-@frappe.whitelist(allow_guest=True)
-def order_payment_failure(integration_request, params):
-	"""Called by razorpay.js on failure
-
-	Args:
-	        integration_request (TYPE): Description
-	        params (TYPE): error data to be updated
-	"""
-	frappe.log_error(params, "Razorpay Payment Failure")
-	params = json.loads(params)
-	integration = frappe.get_doc("Integration Request", integration_request)
-	integration.update_status(params, integration.status)
-
-
-def convert_rupee_to_paisa(**kwargs):
-	for addon in kwargs.get("addons"):
-		addon["item"]["amount"] *= 100
-
-	frappe.conf.converted_rupee_to_paisa = True
+			doc_obj = frappe.get_doc("Integration Request", doc.name)
+			doc_obj.status = "Failed"
+			doc_obj.error = frappe.get_traceback()
+			doc_obj.save()
+			frappe.log_error(doc_obj.error, f"{doc_obj.name} Razorpay capture failed")
 
 
 @frappe.whitelist(allow_guest=True)
 def razorpay_subscription_callback():
 	try:
 		data = frappe.local.form_dict
-
 		validate_payment_callback(data)
-
 		data.update({"payment_gateway": "Razorpay"})
-
 		doc = frappe.get_doc(
 			{
 				"data": json.dumps(frappe.local.form_dict),
@@ -639,7 +681,6 @@ def razorpay_subscription_callback():
 			}
 		).insert(ignore_permissions=True)
 		frappe.db.commit()
-
 		frappe.enqueue(
 			method="payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.handle_subscription_notification",
 			queue="long",
@@ -647,7 +688,6 @@ def razorpay_subscription_callback():
 			is_async=True,
 			**{"doctype": "Integration Request", "docname": doc.name},
 		)
-
 	except frappe.InvalidStatusError:
 		pass
 	except Exception as e:
@@ -658,23 +698,25 @@ def validate_payment_callback(data):
 	def _throw():
 		frappe.throw(_("Invalid Subscription"), exc=frappe.InvalidStatusError)
 
-	subscription_id = data.get("payload").get("subscription").get("entity").get("id")
-
-	if not (subscription_id):
+	subscription_id = data.get("payload", {}).get("subscription", {}).get("entity", {}).get("id")
+	if not subscription_id:
 		_throw()
 
 	controller = frappe.get_doc("Razorpay Settings")
-
-	settings = controller.get_settings(data)
-
+	creds = controller.get_credentials()
 	resp = make_get_request(
 		f"https://api.razorpay.com/v1/subscriptions/{subscription_id}",
-		auth=(settings.api_key, settings.api_secret),
+		auth=(creds.api_key, creds.api_secret),
 	)
-
 	if resp.get("status") != "active":
 		_throw()
 
 
 def handle_subscription_notification(doctype, docname):
 	call_hook_method("handle_subscription_notification", doctype=doctype, docname=docname)
+
+
+def convert_rupee_to_paisa(**kwargs):
+	for addon in kwargs.get("addons"):
+		addon["item"]["amount"] *= 100
+	frappe.conf.converted_rupee_to_paisa = True
