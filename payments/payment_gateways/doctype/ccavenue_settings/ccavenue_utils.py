@@ -44,13 +44,29 @@ def decrypt(cipherText, workingKey):
     decDigest.update(workingKey)
     
     # Convert hex to bytes and decrypt
-    encryptedText = bytes.fromhex(cipherText)
+    try:
+        encryptedText = bytes.fromhex(cipherText)
+    except ValueError as exc:
+        raise ValueError("Invalid encrypted response format from CCAvenue") from exc
+
+    if len(encryptedText) == 0 or len(encryptedText) % 16 != 0:
+        raise ValueError("Invalid encrypted response length from CCAvenue")
+
     dec_cipher = AES.new(decDigest.digest(), AES.MODE_CBC, iv)
     decryptedText = dec_cipher.decrypt(encryptedText)
     
     # Remove padding
     padding_length = decryptedText[-1]
-    return decryptedText[:-padding_length].decode('utf-8')
+    if padding_length < 1 or padding_length > 16:
+        raise ValueError("Unable to decrypt CCAvenue response. Please verify encryption key")
+
+    if decryptedText[-padding_length:] != bytes([padding_length]) * padding_length:
+        raise ValueError("Unable to decrypt CCAvenue response. Please verify encryption key")
+
+    try:
+        return decryptedText[:-padding_length].decode('utf-8')
+    except UnicodeDecodeError as exc:
+        raise ValueError("Unable to decode CCAvenue response. Please verify encryption key") from exc
 
 @frappe.whitelist()
 def test_connection(merchant_id, access_code, encryption_key, environment):
