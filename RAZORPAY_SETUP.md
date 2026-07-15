@@ -158,12 +158,15 @@ Set the **Bank Account** prefix on the Merchant record to `Razorpay`.
 | Webhook Event | URL |
 |---|---|
 | `payment.authorized` | (handled automatically by Checkout.js callback) |
+| `payment.captured` | `https://<your-site>/api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.payment_captured_webhook` |
 | `refund.created` | `https://<your-site>/api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.refund_status` |
 | `refund.processed` | Same as above |
 | `refund.failed` | Same as above |
 | Subscriptions | `https://<your-site>/api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.razorpay_subscription_callback` |
 
 > **Note:** Unlike CCAvenue/Easebuzz, Razorpay does not have a browser-redirect `verify_transaction` URL. Payment verification is done by the frontend calling `verify_payment` after the Checkout.js modal succeeds.
+>
+> `payment_captured_webhook` is implemented as a **backup** path only. It intentionally waits a short delay (about 7 seconds) before processing to let the callback + `verify_payment` path complete first. It includes idempotent checks to prevent duplicate Payment Entries for the same invoice and amount.
 
 ---
 
