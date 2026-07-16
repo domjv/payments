@@ -917,9 +917,8 @@ def verify_payment(razorpay_payment_id, razorpay_order_id, razorpay_signature, t
 	try:
 		integration_request = frappe.get_doc("Integration Request", token)
 
-		# Duplicate-prevention: skip only if fully completed.
-		# If status is Authorized, allow re-verification to promote to Completed.
-		if integration_request.status == "Completed":
+		# Duplicate-prevention: skip if already processed
+		if integration_request.status in ("Completed", "Authorized"):
 			frappe.logger().info(
 				f"Razorpay verify_payment: {token} already processed "
 				f"with status {integration_request.status}. Skipping."
@@ -1030,14 +1029,7 @@ def payment_captured_webhook():
 	"""
 	try:
 		payload_bytes = frappe.request.data
-		signature = (
-			frappe.get_request_header("X-Razorpay-Signature")
-			or frappe.get_request_header("x-razorpay-signature")
-			or frappe.request.headers.get("X-Razorpay-Signature", "")
-			or frappe.request.headers.get("x-razorpay-signature", "")
-			or frappe.request.headers.get("HTTP_X_RAZORPAY_SIGNATURE", "")
-		)
-		signature = signature.strip() if isinstance(signature, str) else ""
+		signature = frappe.request.headers.get("X-Razorpay-Signature", "")
 
 		if not payload_bytes:
 			frappe.local.response.http_status_code = 400
@@ -1079,13 +1071,13 @@ def payment_captured_webhook():
 		reference_doctype = integration_request.reference_doctype or ir_data.get("reference_doctype")
 		reference_docname = integration_request.reference_docname or ir_data.get("reference_docname")
 
-		if integration_request.status == "Completed":
+		if integration_request.status in ("Completed", "Authorized"):
 			_add_invoice_webhook_comment(
 				reference_doctype,
 				reference_docname,
 				(
 					"<b>Razorpay Captured Webhook Skipped</b><br>"
-					f"Reason: Integration Request already completed ({integration_request.status})<br>"
+					f"Reason: Integration Request already processed ({integration_request.status})<br>"
 					f"Payment ID: {payment_id}<br>"
 					f"Order ID: {order_id or 'N/A'}"
 				),
@@ -1110,15 +1102,16 @@ def payment_captured_webhook():
 				frappe.local.response.http_status_code = 401
 				return {"success": False, "error": "Signature verification failed"}
 		else:
-			frappe.logger().warning(
-				f"Razorpay payment.captured signature not verified (signature_present={bool(signature)}, secret_present={bool(creds.api_secret)})"
+			frappe.log_error(
+				f"Razorpay payment.captured signature not verified (signature_present={bool(signature)}, secret_present={bool(creds.api_secret)})",
+				"Razorpay Captured Webhook Signature Warning",
 			)
 
 		# Let callback+verify_payment complete first; webhook acts as backup.
 		time.sleep(RAZORPAY_CAPTURED_WEBHOOK_DELAY_SECONDS)
 
 		integration_request = frappe.get_doc("Integration Request", integration_request.name)
-		if integration_request.status == "Completed":
+		if integration_request.status in ("Completed", "Authorized"):
 			_add_invoice_webhook_comment(
 				reference_doctype,
 				reference_docname,
