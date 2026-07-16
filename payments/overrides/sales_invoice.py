@@ -280,15 +280,6 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 	data = json.loads(integration_request.data) if integration_request.data else {}
 	payment_amount = data.get("amount", 0)
 	service = getattr(integration_request, "integration_request_service", None) or ""
-	is_webhook_backup = (data.get("webhook_source") or "").endswith("webhook")
-
-	def _add_webhook_comment(message):
-		if not is_webhook_backup:
-			return
-		try:
-			doc.add_comment("Info", message)
-		except Exception:
-			pass
 
 	# Gateway-specific reference number
 	if service == "Easebuzz":
@@ -306,14 +297,6 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 			f"Sales Invoice {doc.name} already fully paid. Skipping PE for {integration_request.name}",
 			"Duplicate Payment Prevention",
 		)
-		_add_webhook_comment(
-			(
-				"<b>Razorpay Webhook Payment Skipped</b><br>"
-				"Reason: Invoice already fully paid.<br>"
-				f"Gateway: {service or 'Unknown'}<br>"
-				f"Integration Request: {integration_request.name}"
-			)
-		)
 		return
 
 	if frappe.db.exists(
@@ -324,56 +307,6 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 			f"Payment Entry already exists for {integration_request.name}. Skipping for {doc.name}",
 			"Duplicate Payment Prevention",
 		)
-		_add_webhook_comment(
-			(
-				"<b>Webhook Payment Skipped</b><br>"
-				"Reason: Matching payment entry already exists by reference number.<br>"
-				f"Reference No: {reference_no}<br>"
-				f"Integration Request: {integration_request.name}"
-			)
-		)
-		return
-
-	if frappe.db.exists(
-		"Payment Entry",
-		{
-			"party": doc.customer,
-			"docstatus": ["in", [0, 1]],
-			"paid_amount": payment_amount,
-			"received_amount": payment_amount,
-		},
-	):
-		existing_for_invoice = frappe.db.sql(
-			"""
-				SELECT per.parent
-				FROM `tabPayment Entry Reference` per
-				INNER JOIN `tabPayment Entry` pe ON pe.name = per.parent
-				WHERE per.reference_doctype = 'Sales Invoice'
-					AND per.reference_name = %s
-					AND pe.party = %s
-					AND pe.docstatus IN (0, 1)
-					AND pe.paid_amount = %s
-					AND pe.received_amount = %s
-				LIMIT 1
-			""",
-			(doc.name, doc.customer, payment_amount, payment_amount),
-		)
-		if existing_for_invoice:
-			frappe.log_error(
-				(
-					f"Payment Entry already exists for Sales Invoice {doc.name} with same amount {payment_amount}. "
-					f"Skipping duplicate for Integration Request {integration_request.name}"
-				),
-				"Duplicate Payment Prevention",
-			)
-			_add_webhook_comment(
-				(
-					"<b>RazorpayWebhook Payment Skipped</b><br>"
-					"Reason: Existing payment entry found for same invoice and amount.<br>"
-					f"Amount: {payment_amount}<br>"
-					f"Integration Request: {integration_request.name}"
-				)
-			)
 		return
 
 	if payment_amount > doc.outstanding_amount:
@@ -544,15 +477,6 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 		payment_entry.insert(ignore_permissions=True)
 		payment_entry.submit()
 		doc.reload()
-		_add_webhook_comment(
-			(
-				"<b>Razorpay Webhook Payment Processed</b><br>"
-				f"Payment Entry: {payment_entry.name}<br>"
-				f"Gateway: {service or 'Unknown'}<br>"
-				f"Amount: {payment_amount}<br>"
-				f"Integration Request: {integration_request.name}"
-			)
-		)
 
 	except Exception as e:
 		frappe.log_error(
