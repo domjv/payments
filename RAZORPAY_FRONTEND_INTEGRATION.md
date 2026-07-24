@@ -17,6 +17,7 @@ This guide covers the Razorpay multi-merchant API, mirroring the same contract a
 7. [Error Handling](#7-error-handling)
 8. [Testing](#8-testing)
 9. [Multi-Gateway Routing](#9-multi-gateway-routing)
+10. [payment.captured Webhook Fallback](#10-paymentcaptured-webhook-fallback)
 
 ---
 
@@ -168,6 +169,18 @@ Configure in Razorpay Dashboard. Not called by the frontend.
 ```
 POST /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.refund_status
 ```
+
+---
+
+### 3.5 Payment Captured Webhook (Server-to-Server Fallback)
+
+Configure in Razorpay Dashboard under **Settings → Webhooks**. Subscribe to the **`payment.captured`** event. Not called by the frontend.
+
+```
+POST /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.payment_captured
+```
+
+This is a **fallback** for when the preferred `verify_payment` callback fails (timeout, closed app, network drop — common with UPI). See [§10](#10-paymentcaptured-webhook-fallback).
 
 ---
 
@@ -452,3 +465,37 @@ If different hostels use different gateways, the backend resolves the gateway au
 To know which gateway was resolved, call `handle_cart_submit` (returns `gateway` field) or use the `Payment Gateway Config` API.
 
 > **Tip:** The `handle_cart_submit` endpoint now returns `gateway` in the response alongside `payment_url`, so the frontend can branch on the gateway type without an extra API call.
+
+---
+
+## 10. payment.captured Webhook Fallback
+
+The preferred completion path is still the frontend `verify_payment` callback. The Razorpay `payment.captured` webhook is a **safety net** for stuck `Queued` Integration Requests (common when the UPI app returns but the browser/app never calls `verify_payment`).
+
+### How it works
+
+1. Razorpay POSTs `payment.captured` to the webhook URL.
+2. Backend verifies `X-Razorpay-Signature` against each merchant’s `webhook_secret` (falls back to Razorpay Settings).
+3. If the Integration Request is already `Completed` / `Authorized` → ACK and stop (callback won).
+4. Otherwise the captured payload is **stashed** on the IR (`webhook_capture_pending=1`) and ACK’d immediately.
+5. A scheduler job (~every 2 minutes) waits for a **3-minute grace period**, then:
+   - Skips if the callback completed the IR in the meantime.
+   - Otherwise marks the IR `Completed`, creates the Payment Entry (`reference_no` = Razorpay Payment ID), updates the Sales Invoice, and adds webhook-completion comments.
+
+### Dashboard setup
+
+| Setting | Value |
+|---|---|
+| Webhook URL | `https://<your-erpnext-site>/api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.payment_captured` |
+| Events | `payment.captured` |
+| Secret | Paste into **Razorpay Merchant → Webhook Secret** (or Razorpay Settings global fallback) |
+
+### Frontend impact
+
+No frontend change is required. Keep polling `check_payment_status` after Checkout.js success / on the pending-payment screen. If the webhook fallback completes the payment, status will flip to `Completed` and the user can be redirected to success.
+
+### Audit trail
+
+- Existing “Razorpay Payment Processed” comments on the reference document are unchanged.
+- When the webhook does the work, an extra comment is added on the Sales Invoice / Payment Request / Customer **and** on the Payment Entry: **“Payment completed by Razorpay webhook”** (includes Payment ID, Order ID, and UPI RRN when available).
+- UPI RRN/UTR is stored in Payment Entry remarks (and comments); `reference_no` remains the Razorpay Payment ID for duplicate prevention.

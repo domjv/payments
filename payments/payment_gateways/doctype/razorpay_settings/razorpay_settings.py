@@ -34,6 +34,7 @@
     POST /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.initiate_payment
     POST /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.verify_payment
     GET  /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.check_payment_status
+    POST /api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.payment_captured  # webhook fallback
 
 ### 4. On Completion of Payment
 
@@ -64,9 +65,13 @@ from frappe.integrations.utils import (
 	make_post_request,
 )
 from frappe.model.document import Document
-from frappe.utils import call_hook_method, cint, get_timestamp, get_url
+from frappe.utils import add_to_date, call_hook_method, cint, get_datetime, get_timestamp, get_url, now_datetime
 
 from payments.utils import create_payment_gateway
+
+# Grace period before the payment.captured webhook fallback processes a stuck IR.
+# Gives the preferred frontend callback (verify_payment) time to complete first.
+WEBHOOK_CAPTURE_GRACE_MINUTES = 3
 
 
 class RazorpaySettings(Document):
@@ -287,6 +292,19 @@ class RazorpaySettings(Document):
 					auth=(creds.api_key, creds.api_secret),
 					json=payment_options,
 				)
+				# Persist order id / receipt on the IR so the payment.captured
+				# webhook can locate a still-Queued request without an API call.
+				try:
+					ir_data = json.loads(integration_request.data) if integration_request.data else {}
+					ir_data["razorpay_order_id"] = order.get("id")
+					ir_data["receipt"] = payment_options.get("receipt")
+					ir_data["order_id"] = order.get("id")
+					integration_request.db_set("data", json.dumps(ir_data))
+				except Exception:
+					frappe.log_error(
+						frappe.get_traceback(),
+						"Razorpay create_order: failed to persist order_id on IR",
+					)
 				order["integration_request"] = integration_request.name
 				return order
 			except Exception:
@@ -359,52 +377,25 @@ class RazorpaySettings(Document):
 		redirect_message = data.get("redirect_message") or None
 
 		if self.flags.status_changed_to in ("Authorized", "Verified", "Completed"):
-			if self.data.reference_doctype and self.data.reference_docname:
-				custom_redirect_to = None
-				try:
-					doc = frappe.get_doc(self.data.reference_doctype, self.data.reference_docname)
+			# If a payment.captured webhook already stashed a pending flag, clear it
+			# so the grace-period scheduler does not re-process this IR.
+			try:
+				fresh_data = json.loads(self.integration_request.data) if self.integration_request.data else {}
+				if fresh_data.get("webhook_capture_pending"):
+					fresh_data["webhook_capture_pending"] = 0
+					fresh_data["webhook_skipped_reason"] = "callback_completed"
+					self.integration_request.db_set("data", json.dumps(fresh_data))
+			except Exception:
+				pass
 
-					# Add a comment for audit trail
-					comment_text = (
-						f"<b>Razorpay Payment Processed</b><br>"
-						f"Status: {self.flags.status_changed_to}<br>"
-						f"Payment ID: {self.data.get('razorpay_payment_id', 'N/A')}<br>"
-						f"Order ID: {self.data.get('razorpay_order_id', 'N/A')}<br>"
-						f"Integration Request: {self.integration_request.name}"
-					)
-					try:
-						doc.add_comment("Info", comment_text)
-					except Exception:
-						pass
-
-					# Call Ivy Living handlers directly (same pattern as Easebuzz)
-					if self.data.reference_doctype == "Sales Invoice":
-						from payments.overrides.sales_invoice import handle_payment_authorization_sales_invoice
-						custom_redirect_to = handle_payment_authorization_sales_invoice(
-							doc, "on_payment_authorized", self.flags.status_changed_to
-						)
-					elif self.data.reference_doctype == "Payment Request":
-						from payments.utils.ivyliving_methods import handle_payment_authorization_payment_request
-						custom_redirect_to = handle_payment_authorization_payment_request(
-							doc, "on_payment_authorized", self.flags.status_changed_to
-						)
-					elif self.data.reference_doctype == "Customer":
-						from payments.utils.ivyliving_methods import handle_payment_authorization_customer
-						custom_redirect_to = handle_payment_authorization_customer(
-							doc, "on_payment_authorized", self.flags.status_changed_to
-						)
-					else:
-						if hasattr(doc, "on_payment_authorized"):
-							custom_redirect_to = doc.run_method(
-								"on_payment_authorized", self.flags.status_changed_to
-							)
-				except Exception:
-					frappe.log_error(
-						frappe.get_traceback(), "Razorpay on_payment_authorized error"
-					)
-
-				if custom_redirect_to and not redirect_to:
-					redirect_to = custom_redirect_to
+			custom_redirect_to = self.run_payment_success_handlers(
+				self.integration_request,
+				data,
+				self.flags.status_changed_to,
+				source="callback",
+			)
+			if custom_redirect_to and not redirect_to:
+				redirect_to = custom_redirect_to
 
 			# Build redirect URL
 			if redirect_to:
@@ -439,6 +430,104 @@ class RazorpaySettings(Document):
 
 		return {"redirect_to": redirect_url, "status": status}
 
+	def run_payment_success_handlers(self, integration_request, data, status, source="callback"):
+		"""
+		Add audit comments and dispatch to Sales Invoice / Payment Request /
+		Customer payment-authorization handlers.
+
+		``source`` is ``"callback"`` (preferred frontend verify_payment path) or
+		``"webhook"`` (payment.captured fallback). When ``source == "webhook"`` an
+		extra comment is added noting webhook completion.
+		"""
+		data = data or {}
+		reference_doctype = (
+			getattr(self.data, "reference_doctype", None)
+			or data.get("reference_doctype")
+			or integration_request.reference_doctype
+		)
+		reference_docname = (
+			getattr(self.data, "reference_docname", None)
+			or data.get("reference_docname")
+			or integration_request.reference_docname
+		)
+		payment_id = (
+			getattr(self.data, "razorpay_payment_id", None)
+			or data.get("razorpay_payment_id")
+			or "N/A"
+		)
+		order_id = (
+			getattr(self.data, "razorpay_order_id", None)
+			or data.get("razorpay_order_id")
+			or data.get("order_id")
+			or "N/A"
+		)
+		upi_rrn = data.get("upi_rrn") or ""
+
+		custom_redirect_to = None
+		if not reference_doctype or not reference_docname:
+			return custom_redirect_to
+
+		try:
+			doc = frappe.get_doc(reference_doctype, reference_docname)
+
+			comment_text = (
+				f"<b>Razorpay Payment Processed</b><br>"
+				f"Status: {status}<br>"
+				f"Payment ID: {payment_id}<br>"
+				f"Order ID: {order_id}<br>"
+				f"Integration Request: {integration_request.name}"
+			)
+			if upi_rrn:
+				comment_text += f"<br>UPI RRN: {upi_rrn}"
+			try:
+				doc.add_comment("Info", comment_text)
+			except Exception:
+				pass
+
+			if source == "webhook":
+				webhook_comment = (
+					f"<b>Payment completed by Razorpay webhook</b><br>"
+					f"Event: payment.captured<br>"
+					f"Payment ID: {payment_id}<br>"
+					f"Order ID: {order_id}<br>"
+					f"Integration Request: {integration_request.name}"
+				)
+				if upi_rrn:
+					webhook_comment += f"<br>UPI RRN: {upi_rrn}"
+				try:
+					doc.add_comment("Info", webhook_comment)
+				except Exception:
+					pass
+				frappe.flags.razorpay_webhook_completion = True
+
+			if reference_doctype == "Sales Invoice":
+				from payments.overrides.sales_invoice import handle_payment_authorization_sales_invoice
+				custom_redirect_to = handle_payment_authorization_sales_invoice(
+					doc, "on_payment_authorized", status
+				)
+			elif reference_doctype == "Payment Request":
+				from payments.utils.ivyliving_methods import handle_payment_authorization_payment_request
+				custom_redirect_to = handle_payment_authorization_payment_request(
+					doc, "on_payment_authorized", status
+				)
+			elif reference_doctype == "Customer":
+				from payments.utils.ivyliving_methods import handle_payment_authorization_customer
+				custom_redirect_to = handle_payment_authorization_customer(
+					doc, "on_payment_authorized", status
+				)
+			else:
+				if hasattr(doc, "on_payment_authorized"):
+					custom_redirect_to = doc.run_method("on_payment_authorized", status)
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(), "Razorpay on_payment_authorized error"
+			)
+		finally:
+			if source == "webhook":
+				frappe.flags.razorpay_webhook_completion = False
+
+		return custom_redirect_to
+
 	# ------------------------------------------------------------------
 	# HMAC signature verification
 	# ------------------------------------------------------------------
@@ -452,6 +541,67 @@ class RazorpaySettings(Document):
 		if not result:
 			frappe.throw(_("Razorpay Signature Verification Failed"), exc=frappe.PermissionError)
 		return result
+
+	def verify_webhook_signature(self, body, signature, secret):
+		"""
+		Non-throwing HMAC-SHA256 check for Razorpay webhook payloads.
+		``body`` may be str or bytes (raw request body). Returns True/False.
+		"""
+		if not secret or not signature:
+			return False
+		try:
+			if isinstance(body, bytes):
+				body_bytes = body
+			else:
+				body_bytes = bytes(body, "utf-8")
+			key = bytes(secret, "utf-8")
+			generated = hmac.new(key=key, msg=body_bytes, digestmod=hashlib.sha256).hexdigest()
+			return hmac.compare_digest(generated, signature)
+		except Exception:
+			return False
+
+	def identify_merchant_by_signature(self, body, signature):
+		"""
+		Identify which Razorpay Merchant (or global Settings) owns a webhook
+		by testing ``webhook_secret`` against ``X-Razorpay-Signature``.
+
+		Returns:
+		    frappe._dict with api_key, api_secret, environment, merchant_name,
+		    webhook_secret — or None if no secret matches.
+		"""
+		merchants = frappe.get_all("Razorpay Merchant", fields=["name"])
+		for row in merchants:
+			merchant = frappe.get_doc("Razorpay Merchant", row.name)
+			secret = merchant.get_password(fieldname="webhook_secret", raise_exception=False)
+			if secret and self.verify_webhook_signature(body, signature, secret):
+				return frappe._dict(
+					{
+						"api_key": merchant.api_key,
+						"api_secret": merchant.get_password(
+							fieldname="api_secret", raise_exception=False
+						),
+						"environment": merchant.environment or "Test",
+						"merchant_name": merchant.name,
+						"webhook_secret": secret,
+						"redirect_to": merchant.redirect_to or self.redirect_to or "",
+					}
+				)
+
+		# Global fallback
+		global_secret = self.get_password(fieldname="webhook_secret", raise_exception=False)
+		if global_secret and self.verify_webhook_signature(body, signature, global_secret):
+			return frappe._dict(
+				{
+					"api_key": self.api_key,
+					"api_secret": self.get_password(fieldname="api_secret", raise_exception=False),
+					"environment": self.environment or "Test",
+					"merchant_name": None,
+					"webhook_secret": global_secret,
+					"redirect_to": self.redirect_to or "",
+				}
+			)
+
+		return None
 
 	# ------------------------------------------------------------------
 	# Subscription support (unchanged from upstream)
@@ -1091,6 +1241,276 @@ def refund_status():
 			"Razorpay Refund Webhook Error",
 		)
 		return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist(allow_guest=True)
+def payment_captured():
+	"""
+	Webhook endpoint for Razorpay ``payment.captured`` events.
+
+	Acts as a **fallback** only: if the preferred frontend callback
+	(``verify_payment``) has already completed the Integration Request, this
+	endpoint acknowledges and does nothing. Otherwise it stashes the captured
+	payload on the IR and lets the grace-period scheduler finish processing.
+
+	Configure in the Razorpay Dashboard under Settings → Webhooks:
+	``<site>/api/method/payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.payment_captured``
+
+	Subscribe to the ``payment.captured`` event. Use the per-merchant
+	``webhook_secret`` (or the global Settings fallback) for signature verification.
+	"""
+	try:
+		payload_bytes = frappe.request.data
+		signature = frappe.request.headers.get("X-Razorpay-Signature", "")
+
+		if not payload_bytes:
+			frappe.local.response.http_status_code = 400
+			return {"success": False, "error": "Empty payload"}
+
+		data = json.loads(payload_bytes)
+		event = data.get("event", "")
+
+		if event != "payment.captured":
+			return {"success": True, "message": "Event ignored"}
+
+		settings = frappe.get_doc("Razorpay Settings")
+		creds = settings.identify_merchant_by_signature(payload_bytes, signature)
+		if not creds:
+			frappe.log_error(
+				"No Razorpay Merchant/Settings webhook_secret matched the signature",
+				"Razorpay payment.captured Webhook",
+			)
+			frappe.local.response.http_status_code = 401
+			return {"success": False, "error": "Signature verification failed"}
+
+		payment_entity = data.get("payload", {}).get("payment", {}).get("entity", {}) or {}
+		payment_id = payment_entity.get("id")
+		order_id = payment_entity.get("order_id")
+		acquirer_data = payment_entity.get("acquirer_data") or {}
+		upi_rrn = (
+			acquirer_data.get("rrn")
+			or acquirer_data.get("upi_transaction_id")
+			or payment_entity.get("acquirer_data", {}).get("rrn")
+			or ""
+		)
+
+		if not order_id and not payment_id:
+			return {"success": False, "error": "order_id and payment_id missing from payload"}
+
+		integration_request = _find_integration_request_for_captured_payment(
+			order_id=order_id,
+			payment_id=payment_id,
+			creds=creds,
+		)
+
+		if not integration_request:
+			frappe.log_error(
+				f"Integration Request not found for Razorpay payment_id={payment_id} order_id={order_id}",
+				"Razorpay payment.captured Webhook",
+			)
+			# ACK so Razorpay stops retrying unknown/orphan events
+			return {"success": True, "message": "Integration Request not found – acknowledged"}
+
+		if integration_request.status in ("Completed", "Authorized"):
+			return {
+				"success": True,
+				"message": "Already processed by callback",
+				"status": integration_request.status,
+				"integration_request": integration_request.name,
+			}
+
+		ir_data = json.loads(integration_request.data) if integration_request.data else {}
+		ir_data.update(
+			{
+				"razorpay_payment_id": payment_id,
+				"razorpay_order_id": order_id or ir_data.get("razorpay_order_id"),
+				"upi_rrn": upi_rrn,
+				"payment_method": payment_entity.get("method"),
+				"webhook_source": "payment.captured",
+				"webhook_capture_pending": 1,
+				"webhook_captured_at": str(now_datetime()),
+				"webhook_merchant_name": creds.get("merchant_name") or "",
+			}
+		)
+		# Ensure reference fields are present for the scheduler handler
+		if not ir_data.get("reference_doctype"):
+			ir_data["reference_doctype"] = integration_request.reference_doctype
+		if not ir_data.get("reference_docname"):
+			ir_data["reference_docname"] = integration_request.reference_docname
+
+		integration_request.db_set("data", json.dumps(ir_data))
+		frappe.db.commit()
+
+		return {
+			"success": True,
+			"message": "Captured payload stashed; awaiting grace period",
+			"integration_request": integration_request.name,
+			"payment_id": payment_id,
+		}
+
+	except Exception as e:
+		frappe.log_error(
+			f"Razorpay payment.captured webhook error: {str(e)}\n{frappe.get_traceback()}",
+			"Razorpay payment.captured Webhook Error",
+		)
+		return {"success": False, "error": str(e)}
+
+
+def _find_integration_request_for_captured_payment(order_id=None, payment_id=None, creds=None):
+	"""
+	Locate the Razorpay Integration Request for a captured payment.
+
+	Lookup order:
+	  1. IR whose data JSON contains the given razorpay_order_id / order_id
+	  2. IR whose data JSON contains the given razorpay_payment_id
+	  3. Fetch Razorpay order → notes.token / receipt → IR name
+	"""
+	# Prefer SQL LIKE on recent Razorpay IRs rather than loading every row.
+	# Cap the scan window to keep this cheap under load.
+	candidates = frappe.get_all(
+		"Integration Request",
+		filters={"integration_request_service": "Razorpay"},
+		fields=["name", "data", "status", "reference_doctype", "reference_docname"],
+		order_by="creation desc",
+		limit_page_length=500,
+	)
+
+	order_match = None
+	payment_match = None
+	for ir in candidates:
+		ir_data = {}
+		try:
+			ir_data = json.loads(ir.data) if ir.data else {}
+		except Exception:
+			continue
+
+		stored_order = ir_data.get("razorpay_order_id") or ir_data.get("order_id")
+		stored_payment = ir_data.get("razorpay_payment_id")
+
+		if order_id and stored_order == order_id:
+			order_match = ir.name
+			break
+		if payment_id and stored_payment == payment_id and not payment_match:
+			payment_match = ir.name
+
+	ir_name = order_match or payment_match
+	if ir_name:
+		return frappe.get_doc("Integration Request", ir_name)
+
+	# Fallback: ask Razorpay for the order notes/receipt
+	if order_id and creds and creds.get("api_key") and creds.get("api_secret"):
+		try:
+			order = make_get_request(
+				f"https://api.razorpay.com/v1/orders/{order_id}",
+				auth=(creds.api_key, creds.api_secret),
+			)
+			notes = order.get("notes") or {}
+			if isinstance(notes, str):
+				try:
+					notes = json.loads(notes)
+				except Exception:
+					notes = {}
+			token = notes.get("token") if isinstance(notes, dict) else None
+			receipt = order.get("receipt")
+			for candidate in (token, receipt):
+				if candidate and frappe.db.exists("Integration Request", candidate):
+					return frappe.get_doc("Integration Request", candidate)
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(),
+				"Razorpay payment.captured: order lookup failed",
+			)
+
+	return None
+
+
+def process_webhook_captured_payments():
+	"""
+	Scheduled job: complete Razorpay Integration Requests that were stashed by
+	the payment.captured webhook and whose grace period has elapsed.
+
+	If the preferred callback already marked the IR Completed/Authorized during
+	the grace window, the pending flag is cleared and nothing else is done.
+	"""
+	grace_cutoff = add_to_date(now_datetime(), minutes=-WEBHOOK_CAPTURE_GRACE_MINUTES)
+	candidates = frappe.get_all(
+		"Integration Request",
+		filters={
+			"integration_request_service": "Razorpay",
+			"status": ["not in", ["Completed", "Authorized", "Cancelled"]],
+		},
+		fields=["name", "data", "status", "reference_doctype", "reference_docname"],
+		order_by="creation desc",
+		limit_page_length=200,
+	)
+
+	controller = frappe.get_doc("Razorpay Settings")
+
+	for row in candidates:
+		try:
+			ir_data = json.loads(row.data) if row.data else {}
+		except Exception:
+			continue
+
+		if not ir_data.get("webhook_capture_pending"):
+			continue
+
+		captured_at = ir_data.get("webhook_captured_at")
+		if not captured_at:
+			continue
+		try:
+			if get_datetime(captured_at) > grace_cutoff:
+				continue  # still inside grace window
+		except Exception:
+			continue
+
+		try:
+			integration_request = frappe.get_doc("Integration Request", row.name)
+			integration_request.reload()
+
+			# Callback may have finished during the grace window
+			if integration_request.status in ("Completed", "Authorized"):
+				ir_data = json.loads(integration_request.data) if integration_request.data else {}
+				ir_data["webhook_capture_pending"] = 0
+				ir_data["webhook_skipped_reason"] = "callback_completed_during_grace"
+				integration_request.db_set("data", json.dumps(ir_data))
+				frappe.db.commit()
+				continue
+
+			ir_data = json.loads(integration_request.data) if integration_request.data else {}
+			ir_data["webhook_capture_pending"] = 0
+			ir_data["webhook_processed_at"] = str(now_datetime())
+			ir_data["webhook_source"] = ir_data.get("webhook_source") or "payment.captured"
+
+			# Mark Completed then run the same success handlers as the callback
+			integration_request.update_status(ir_data, "Completed")
+			integration_request.reload()
+
+			controller.integration_request = integration_request
+			controller.data = frappe._dict(ir_data)
+			controller.data.razorpay_payment_id = ir_data.get("razorpay_payment_id")
+			controller.data.razorpay_order_id = ir_data.get("razorpay_order_id")
+			controller.data.reference_doctype = (
+				ir_data.get("reference_doctype") or integration_request.reference_doctype
+			)
+			controller.data.reference_docname = (
+				ir_data.get("reference_docname") or integration_request.reference_docname
+			)
+
+			controller.run_payment_success_handlers(
+				integration_request,
+				ir_data,
+				"Completed",
+				source="webhook",
+			)
+			frappe.db.commit()
+
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(),
+				f"Razorpay webhook fallback failed for {row.name}",
+			)
+			frappe.db.rollback()
 
 
 @frappe.whitelist(allow_guest=True)

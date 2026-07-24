@@ -60,6 +60,15 @@ def handle_payment_authorization_payment_request(doc, method, status):
         bank_account = f"{merchant_doc.bank_account} - {company_abbr}" if (merchant_doc and merchant_doc.get("bank_account")) else f"Razorpay - {company_abbr}"
         reference_no = ir_data.get("razorpay_payment_id") or ir_data.get("razorpay_order_id") or "INV-0001"
         mode_of_payment = "Razorpay"
+        pe_remarks = (
+            f"Payment received via Razorpay. "
+            f"Payment ID: {ir_data.get('razorpay_payment_id', '')}. "
+            f"Order ID: {ir_data.get('razorpay_order_id', '')}."
+        )
+        if ir_data.get("upi_rrn"):
+            pe_remarks += f" UPI RRN: {ir_data.get('upi_rrn')}."
+        if getattr(frappe.flags, "razorpay_webhook_completion", False):
+            pe_remarks += " (completed by Razorpay webhook)"
     elif service == "Easebuzz":
         merchant_name = ir_data.get("custom_merchant_name")
         merchant_doc = None
@@ -78,12 +87,14 @@ def handle_payment_authorization_payment_request(doc, method, status):
         bank_account = f"{merchant_doc.bank_account} - {company_abbr}" if (merchant_doc and merchant_doc.get("bank_account")) else f"Easebuzz - {company_abbr}"
         reference_no = ir_data.get("easepayid") or ir_data.get("txnid") or "INV-0001"
         mode_of_payment = "Easebuzz"
+        pe_remarks = None
     else:
         # CCAvenue (default)
         debtors_account = f"Debtors - {company_abbr}"
         bank_account = f"CCAvenue - {company_abbr}"
         reference_no = ir_data.get("tracking_id") or "INV-0001"
         mode_of_payment = "CCAvenue"
+        pe_remarks = None
 
     integration_request = frappe.db.get_value(
         "Integration Request",
@@ -95,7 +106,7 @@ def handle_payment_authorization_payment_request(doc, method, status):
         reference_no = json.loads(integration_request).get("tracking_id") or reference_no
 
     try:
-        payment_entry = frappe.get_doc({
+        pe_dict = {
             "doctype": "Payment Entry",
             "payment_type": "Receive",
             "mode_of_payment": mode_of_payment,
@@ -123,9 +134,26 @@ def handle_payment_authorization_payment_request(doc, method, status):
                     "account": debtors_account
                 }
             ],
-        })
+        }
+        if pe_remarks:
+            pe_dict["remarks"] = pe_remarks
+        payment_entry = frappe.get_doc(pe_dict)
         payment_entry.insert(ignore_permissions=True)
         payment_entry.submit()
+
+        if getattr(frappe.flags, "razorpay_webhook_completion", False) and service == "Razorpay":
+            webhook_comment = (
+                f"<b>Payment completed by Razorpay webhook</b><br>"
+                f"Event: payment.captured<br>"
+                f"Payment ID: {ir_data.get('razorpay_payment_id', 'N/A')}<br>"
+                f"Order ID: {ir_data.get('razorpay_order_id', 'N/A')}<br>"
+            )
+            if ir_data.get("upi_rrn"):
+                webhook_comment += f"<br>UPI RRN: {ir_data.get('upi_rrn')}"
+            try:
+                payment_entry.add_comment("Info", webhook_comment)
+            except Exception:
+                pass
     except Exception as e:
         frappe.log_error(
             f"Failed to create Payment Entry for Payment Request {doc.name}",
@@ -240,6 +268,11 @@ def handle_payment_authorization_customer(doc, method, status):
         if merchant_dict.get("debtors_account") is not None and merchant_dict.get("debtors_account") != "":
             debtors_account_name = merchant_dict.get("debtors_account")
         remarks = remarks + f" | Merchant: {merchant_name}"
+    if service == "Razorpay":
+        if request_data.get("upi_rrn"):
+            remarks = f"{remarks} | UPI RRN: {request_data.get('upi_rrn')}"
+        if getattr(frappe.flags, "razorpay_webhook_completion", False):
+            remarks = f"{remarks} | completed by Razorpay webhook"
     default_currency = frappe.db.get_value("Company", company, "default_currency")
     company_abbr = frappe.db.get_value("Company", company, "abbr")
 
@@ -271,6 +304,20 @@ def handle_payment_authorization_customer(doc, method, status):
 
         payment_entry.insert(ignore_permissions=True)
         payment_entry.submit()
+
+        if getattr(frappe.flags, "razorpay_webhook_completion", False) and service == "Razorpay":
+            webhook_comment = (
+                f"<b>Payment completed by Razorpay webhook</b><br>"
+                f"Event: payment.captured<br>"
+                f"Payment ID: {request_data.get('razorpay_payment_id', 'N/A')}<br>"
+                f"Order ID: {request_data.get('razorpay_order_id', 'N/A')}<br>"
+            )
+            if request_data.get("upi_rrn"):
+                webhook_comment += f"<br>UPI RRN: {request_data.get('upi_rrn')}"
+            try:
+                payment_entry.add_comment("Info", webhook_comment)
+            except Exception:
+                pass
 
         try:
             invoice_items = []
@@ -312,12 +359,18 @@ def handle_payment_authorization_customer(doc, method, status):
                     "reference_row": None,
                     "advance_amount": total_amount,
                     "allocated_amount": total_amount,
-                    "remarks": f"Amount {default_currency} {total_amount} received from {doc.name}\nTransaction reference no {request_data.get('tracking_id')} dated {frappe.utils.nowdate()}"
+                    "remarks": f"Amount {default_currency} {total_amount} received from {doc.name}\nTransaction reference no {request_data.get('tracking_id') or request_data.get('razorpay_payment_id')} dated {frappe.utils.nowdate()}"
                 }]
             })
 
             sales_invoice.insert(ignore_permissions=True)
             sales_invoice.submit()
+
+            if getattr(frappe.flags, "razorpay_webhook_completion", False) and service == "Razorpay":
+                try:
+                    sales_invoice.add_comment("Info", webhook_comment)
+                except Exception:
+                    pass
 
             try:
                 for item_code in item_codes:
