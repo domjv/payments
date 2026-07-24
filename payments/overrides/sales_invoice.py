@@ -403,6 +403,10 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 				f"Order ID: {data.get('razorpay_order_id', '')}. "
 				f"Integration Request: {integration_request.name}"
 			)
+			if data.get("upi_rrn"):
+				remarks += f". UPI RRN: {data.get('upi_rrn')}"
+			if getattr(frappe.flags, "razorpay_webhook_completion", False):
+				remarks += " (completed by Razorpay webhook)"
 
 		else:
 			# CCAvenue (default)
@@ -477,6 +481,23 @@ def handle_payment_authorization_sales_invoice(doc, method, payment_status):
 		payment_entry.insert(ignore_permissions=True)
 		payment_entry.submit()
 		doc.reload()
+
+		# Extra audit comment on Payment Entry when completed via webhook.
+		# (Sales Invoice webhook comment is already added in run_payment_success_handlers.)
+		if getattr(frappe.flags, "razorpay_webhook_completion", False) and service == "Razorpay":
+			webhook_comment = (
+				f"<b>Payment completed by Razorpay webhook</b><br>"
+				f"Event: payment.captured<br>"
+				f"Payment ID: {data.get('razorpay_payment_id', 'N/A')}<br>"
+				f"Order ID: {data.get('razorpay_order_id', 'N/A')}<br>"
+				f"Integration Request: {integration_request.name}"
+			)
+			if data.get("upi_rrn"):
+				webhook_comment += f"<br>UPI RRN: {data.get('upi_rrn')}"
+			try:
+				payment_entry.add_comment("Info", webhook_comment)
+			except Exception:
+				pass
 
 	except Exception as e:
 		frappe.log_error(

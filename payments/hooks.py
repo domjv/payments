@@ -139,6 +139,13 @@ scheduler_events = {
 	"all": [
 		"payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.capture_payment",
 	],
+	# Process payment.captured webhook fallbacks after the grace period so the
+	# preferred frontend callback (verify_payment) normally wins.
+	"cron": {
+		"*/2 * * * *": [
+			"payments.payment_gateways.doctype.razorpay_settings.razorpay_settings.process_webhook_captured_payments",
+		],
+	},
 }
 
 # Testing

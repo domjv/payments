@@ -10,6 +10,7 @@
   "is_default",
   "api_key",
   "api_secret",
+  "webhook_secret",
   "environment",
   "column_break_itky",
   "bank_account",
@@ -47,6 +48,12 @@
    "in_list_view": 1,
    "label": "API Secret",
    "reqd": 1
+  },
+  {
+   "description": "Webhook signing secret from the Razorpay Dashboard (Settings → Webhooks). Used to verify payment.captured and refund webhooks for this merchant.",
+   "fieldname": "webhook_secret",
+   "fieldtype": "Password",
+   "label": "Webhook Secret"
   },
   {
    "fieldname": "environment",

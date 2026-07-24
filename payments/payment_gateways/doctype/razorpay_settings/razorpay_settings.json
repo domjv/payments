@@ -26,6 +26,14 @@
    "reqd": 0
   },
   {
+   "fieldname": "webhook_secret",
+   "fieldtype": "Password",
+   "label": "Webhook Secret (Global Fallback)",
+   "description": "Global fallback webhook signing secret used when no matching Razorpay Merchant webhook_secret validates the signature.",
+   "permlevel": 0,
+   "reqd": 0
+  },
+  {
    "fieldname": "environment",
    "fieldtype": "Select",
    "label": "Environment (Global Fallback)",
